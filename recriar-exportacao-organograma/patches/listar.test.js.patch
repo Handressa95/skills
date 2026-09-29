@@ -1,0 +1,454 @@
+diff --git a/src/1.apresentacao/views/organograma/listar/listar.test.js b/src/1.apresentacao/views/organograma/listar/listar.test.js
+index a039f593..ada7e052 100644
+--- a/src/1.apresentacao/views/organograma/listar/listar.test.js
++++ b/src/1.apresentacao/views/organograma/listar/listar.test.js
+@@ -21,12 +21,14 @@ import mensagem from '@/1.apresentacao/helpers/mensagem/mensagem'
+ import organogramaServico from '@/2.servicos/organograma/organogramaServico'
+ import alocacaoCargoServico from '@/2.servicos/alocacaocargo/alocacaoCargoServico'
+ import simulacaoServico from '@/2.servicos/simulacao/simulacaoServico'
++import projetoSimulacaoServico from '@/2.servicos/projetosimulacao/projetoSimulacaoServico'
+ import identidadeVisualServico from '@/2.servicos/identidadevisual/identidadeVisualServico'
+ 
+ vi.mock('@/1.apresentacao/helpers/mensagem/mensagem')
+ vi.mock('@/2.servicos/organograma/organogramaServico')
+ vi.mock('@/2.servicos/alocacaocargo/alocacaoCargoServico')
+ vi.mock('@/2.servicos/simulacao/simulacaoServico')
++vi.mock('@/2.servicos/projetosimulacao/projetoSimulacaoServico')
+ vi.mock('@/2.servicos/identidadevisual/identidadeVisualServico')
+ vi.mock('@/2.servicos/autenticacao/autenticarServico', () => ({
+   default: {
+@@ -40,9 +42,12 @@ vi.mock('@/2.servicos/autenticacao/autenticarServico', () => ({
+ vi.mock('jspdf', () => ({
+   jsPDF: vi.fn().mockImplementation(() => ({
+     addImage: vi.fn(),
++    addPage: vi.fn(),
+     save: vi.fn(),
+     setFontSize: vi.fn(),
+     setTextColor: vi.fn(),
++    setFillColor: vi.fn(),
++    rect: vi.fn(),
+     setFont: vi.fn(),
+     text: vi.fn(),
+     setDrawColor: vi.fn(),
+@@ -149,6 +154,7 @@ describe('listar-organograma', () => {
+     alocacaoCargoServico.pesquisarUnidadeFuncional = vi.fn()
+     simulacaoServico.buscarOrganogramaGrafico = vi.fn()
+     simulacaoServico.pesquisarPorChave = vi.fn()
++    projetoSimulacaoServico.pesquisarPorChave = vi.fn().mockResolvedValue({ sucesso: false })
+     identidadeVisualServico.obterLogosRelatorio = vi.fn().mockResolvedValue({ logoPrincipal: null, logoSecundaria: null })
+     identidadeVisualServico.pesquisarPorUnidadeFuncionalId = vi.fn().mockResolvedValue({ sucesso: false })
+   })
+@@ -1503,6 +1509,413 @@ describe('listar-organograma', () => {
+     })
+   })
+ 
++  describe('Modal de exportacao e paginacao por papel', () => {
++    const setupDomExportMocks = () => {
++      const mockCtx = {
++        drawImage: vi.fn(),
++        fillRect: vi.fn(),
++        set fillStyle(value) {
++          this._fillStyle = value
++        },
++      }
++
++      const mockCanvas = {
++        width: 0,
++        height: 0,
++        getContext: vi.fn(() => mockCtx),
++        toDataURL: vi.fn(() => 'data:image/png;base64,mock'),
++      }
++
++      const originalCreateElement = document.createElement.bind(document)
++      vi.spyOn(document, 'createElement').mockImplementation((tagName) => {
++        const lowerTag = String(tagName).toLowerCase()
++        if (lowerTag === 'canvas') return mockCanvas
++        if (lowerTag === 'a') {
++          const anchor = originalCreateElement('a')
++          anchor.click = vi.fn()
++          return anchor
++        }
++        return originalCreateElement(tagName)
++      })
++
++      return { mockCanvas }
++    }
++
++    const mockJsPdfPaginado = async () => {
++      const { jsPDF } = await import('jspdf')
++      const addImageMock = vi.fn()
++      const addPageMock = vi.fn()
++      const saveMock = vi.fn()
++      const textMock = vi.fn()
++      const rectMock = vi.fn()
++      const setFillColorMock = vi.fn()
++      vi.mocked(jsPDF).mockImplementation(() => ({
++        addImage: addImageMock,
++        addPage: addPageMock,
++        save: saveMock,
++        setFontSize: vi.fn(),
++        setTextColor: vi.fn(),
++        setFillColor: setFillColorMock,
++        rect: rectMock,
++        setFont: vi.fn(),
++        text: textMock,
++        setDrawColor: vi.fn(),
++        setLineWidth: vi.fn(),
++        line: vi.fn(),
++        getTextWidth: vi.fn().mockReturnValue(50),
++        internal: {
++          pageSize: {
++            getWidth: vi.fn().mockReturnValue(300),
++            getHeight: vi.fn().mockReturnValue(400),
++          },
++        },
++      }))
++      return { addImageMock, addPageMock, saveMock, textMock, rectMock, setFillColorMock }
++    }
++
++    afterEach(() => {
++      if (document.createElement.mockRestore) {
++        document.createElement.mockRestore()
++      }
++    })
++
++    it('abrirModalExportar deve abrir o modal com a dimensao do organograma e o formato solicitado', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 400, height: 250 })
++
++      wrapper.vm.abrirModalExportar('jpg')
++
++      expect(wrapper.vm.mostrarModalExportar).toBe(true)
++      expect(wrapper.vm.dimensaoOrganogramaExportacao).toEqual({ width: 400, height: 250 })
++      expect(wrapper.vm.formatoExportarInicial).toBe('jpg')
++    })
++
++    it('abrirModalExportar deve bloquear a exportacao quando a simulacao nao possui unidades', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.modoSimulacao = true
++      wrapper.vm.organogramas = []
++
++      wrapper.vm.abrirModalExportar('pdf')
++
++      expect(mensagem.alerta).toHaveBeenCalledWith('Esta simulação não possui unidades para exportar.')
++      expect(wrapper.vm.mostrarModalExportar).toBe(false)
++    })
++
++    it('fecharModalExportar deve fechar o modal', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.mostrarModalExportar = true
++
++      wrapper.vm.fecharModalExportar()
++
++      expect(wrapper.vm.mostrarModalExportar).toBe(false)
++    })
++
++    it('capturarPreviewExportacao deve delegar a captura para o componente de detalhes', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const spy = vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem')
++
++      await wrapper.vm.capturarPreviewExportacao(2)
++
++      expect(spy).toHaveBeenCalledWith(2)
++    })
++
++    it('capturarPreviewExportacao deve resolver null quando nao houver componente de detalhes', async () => {
++      wrapper = await createWrapper()
++
++      const resultado = await wrapper.vm.capturarPreviewExportacao(2)
++
++      expect(resultado).toBeNull()
++    })
++
++    it('confirmarExportacao deve chamar generatePdf e fechar o modal quando o formato for pdf', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.mostrarModalExportar = true
++      const generatePdfSpy = vi.spyOn(wrapper.vm, 'generatePdf').mockResolvedValue()
++
++      const parametros = { formato: 'pdf', papel: 'A4', orientacao: 'retrato', escala: 100, folhas: { cols: 1, rows: 1 } }
++      await wrapper.vm.confirmarExportacao(parametros)
++
++      expect(generatePdfSpy).toHaveBeenCalledWith(parametros)
++      expect(wrapper.vm.mostrarModalExportar).toBe(false)
++    })
++
++    it('confirmarExportacao deve chamar generateJpg quando o formato for jpg', async () => {
++      wrapper = await createWrapper()
++      const generateJpgSpy = vi.spyOn(wrapper.vm, 'generateJpg').mockResolvedValue()
++
++      const parametros = { formato: 'jpg', papel: 'A4', orientacao: 'retrato', escala: 80, folhas: { cols: 1, rows: 1 } }
++      await wrapper.vm.confirmarExportacao(parametros)
++
++      expect(generateJpgSpy).toHaveBeenCalledWith(parametros)
++    })
++
++    it('generatePdf com parametrosPapel de uma folha nao deve chamar addPage', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { addPageMock, saveMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 300,
++        height: 150,
++      })
++
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 100,
++        folhas: { cols: 1, rows: 1 },
++      })
++
++      expect(addPageMock).not.toHaveBeenCalled()
++      expect(saveMock).toHaveBeenCalledWith('organograma.pdf')
++      expect(mensagem.sucesso).toHaveBeenCalledWith('PDF exportado com sucesso.')
++    })
++
++    it('generatePdf com parametrosPapel de multiplas folhas deve paginar chamando addPage', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { addPageMock, saveMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 300,
++        height: 150,
++      })
++
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 100,
++        folhas: { cols: 2, rows: 1 },
++      })
++
++      // 2 folhas => 1 chamada de addPage (a primeira folha nao chama addPage)
++      expect(addPageMock).toHaveBeenCalledTimes(1)
++      expect(saveMock).toHaveBeenCalledWith('organograma.pdf')
++    })
++
++    it('generatePdf com parametrosPapel deve centralizar o conteudo horizontalmente na area util da folha, mantendo-o ancorado no topo', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { addImageMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 300,
++        height: 150,
++      })
++
++      // Escala de 50% deixa o conteudo bem menor que a area util da folha A4
++      // — se nao houver centralizacao horizontal, o addImage recebe x = margem (20).
++      // Verticalmente o conteudo deve ficar ancorado no topo (logo abaixo do
++      // cabecalho), sem centralizar — por isso y nao deve crescer com a escala.
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 50,
++        folhas: { cols: 1, rows: 1 },
++      })
++
++      const chamadaConteudo = addImageMock.mock.calls.find((chamada) => chamada[0] === 'data:image/png;base64,mock')
++      const [, , x, y] = chamadaConteudo
++      // headerHeight (100) + legendaHeight (0, sem legenda) + margin (20).
++      expect(x).toBeGreaterThan(100)
++      expect(y).toBe(120)
++    })
++
++    it('generatePdf com parametrosPapel nao deve mais escrever numero de folha (paginacao) sobre o cabecalho', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { textMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 300,
++        height: 150,
++      })
++
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 100,
++        folhas: { cols: 2, rows: 2 },
++      })
++
++      const chamouTextoFolha = textMock.mock.calls.some((chamada) => String(chamada[0]).includes('Folha'))
++      expect(chamouTextoFolha).toBe(false)
++    })
++
++    it('generatePdf com parametrosPapel de multiplas folhas mantem o offset vertical do conteudo igual em todas as folhas (ancorado no topo, sem centralizar)', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { addImageMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 600, height: 300, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 600,
++        height: 300,
++      })
++
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 100,
++        folhas: { cols: 2, rows: 2 },
++      })
++
++      const chamadasConteudo = addImageMock.mock.calls.filter((chamada) => chamada[0] === 'data:image/png;base64,mock')
++      const valoresY = chamadasConteudo.map((chamada) => chamada[3])
++      // Mesmo na ultima linha/coluna (fatia menor que as demais), o y deve
++      // permanecer o mesmo — sem centralizacao vertical do conteudo.
++      expect(new Set(valoresY).size).toBe(1)
++    })
++
++    it('generatePdf em modoSimulacao deve exibir a legenda de acoes mantendo o cabecalho institucional', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.modoSimulacao = true
++      wrapper.vm.nomeSimulacao = 'Simulação X'
++      wrapper.vm.projetoNome = 'Projeto Y'
++      wrapper.vm.situacaoSimulacao = 'Em processo'
++      wrapper.vm.organogramas = [{ id: 1, tipoAcaoSimulacao: 1 }]
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { textMock, rectMock, setFillColorMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 300,
++        height: 150,
++      })
++
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 100,
++        folhas: { cols: 1, rows: 1 },
++      })
++
++      // Cabeçalho institucional é o mesmo em simulação ou não — só a legenda
++      // de ações diferencia visualmente o PDF de uma simulação.
++      expect(textMock).toHaveBeenCalledWith('Prefeitura Municipal de Curitiba', expect.anything(), expect.anything(), expect.anything())
++      expect(textMock).not.toHaveBeenCalledWith('Organograma da Simulação', expect.anything(), expect.anything(), expect.anything())
++      expect(textMock.mock.calls.some((chamada) => chamada[0] === 'Simulação X')).toBe(false)
++      expect(rectMock).toHaveBeenCalled()
++      expect(setFillColorMock).toHaveBeenCalled()
++    })
++
++    it('generatePdf em modoSimulacao sem acrescimos/alteracoes nao deve desenhar a legenda de acoes', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.modoSimulacao = true
++      wrapper.vm.nomeSimulacao = 'Simulação X'
++      wrapper.vm.organogramas = [{ id: 1, tipoAcaoSimulacao: 0 }]
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { rectMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 300,
++        height: 150,
++      })
++
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 100,
++        folhas: { cols: 1, rows: 1 },
++      })
++
++      expect(rectMock).not.toHaveBeenCalled()
++    })
++
++    it('mostrarLegendaExportacao deve refletir modoSimulacao e a existencia de acoes de acrescimo/alteracao', async () => {
++      wrapper = await createWrapper()
++
++      wrapper.vm.modoSimulacao = false
++      wrapper.vm.organogramas = [{ id: 1, tipoAcaoSimulacao: 1 }]
++      expect(wrapper.vm.mostrarLegendaExportacao).toBe(false)
++
++      wrapper.vm.modoSimulacao = true
++      wrapper.vm.organogramas = [{ id: 1, tipoAcaoSimulacao: 0 }]
++      expect(wrapper.vm.mostrarLegendaExportacao).toBe(false)
++
++      wrapper.vm.organogramas = [{ id: 1, tipoAcaoSimulacao: 2 }]
++      expect(wrapper.vm.mostrarLegendaExportacao).toBe(true)
++    })
++
++    it('generatePdf deve bloquear a exportacao quando a simulacao nao possui unidades', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.modoSimulacao = true
++      wrapper.vm.organogramas = []
++
++      await wrapper.vm.generatePdf({ formato: 'pdf', papel: 'A4', orientacao: 'retrato', escala: 100, folhas: { cols: 1, rows: 1 } })
++
++      expect(mensagem.alerta).toHaveBeenCalledWith('Esta simulação não possui unidades para exportar.')
++      expect(mensagem.sucesso).not.toHaveBeenCalled()
++    })
++
++    it('generateJpg deve bloquear a exportacao quando a simulacao nao possui unidades', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.modoSimulacao = true
++      wrapper.vm.organogramas = []
++
++      await wrapper.vm.generateJpg({ formato: 'jpg', papel: 'A4', orientacao: 'retrato', escala: 100, folhas: { cols: 1, rows: 1 } })
++
++      expect(mensagem.alerta).toHaveBeenCalledWith('Esta simulação não possui unidades para exportar.')
++      expect(mensagem.sucesso).not.toHaveBeenCalled()
++    })
++
++    it('generateJpg com parametrosPapel deve reduzir o pixelRatio de captura proporcionalmente a escala', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 200, height: 100 })
++      const capturarSpy = vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 200, height: 100, toDataURL: () => 'data:image/jpeg;base64,mock' },
++      })
++
++      await wrapper.vm.generateJpg({ formato: 'jpg', papel: 'A4', orientacao: 'retrato', escala: 50, folhas: { cols: 1, rows: 1 } })
++
++      expect(capturarSpy).toHaveBeenCalled()
++      const pixelRatioUsado = capturarSpy.mock.calls[0][0]
++      expect(pixelRatioUsado).toBeCloseTo(2.5)
++      expect(mensagem.sucesso).toHaveBeenCalledWith('Imagem JPG exportada com sucesso.')
++    })
++  })
++
+   describe('Metodo pesquisar — erro sincrono', () => {
+     it('deve exibir erro inesperado quando o servico lancar excecao sincrona', async () => {
+       wrapper = await createWrapper()

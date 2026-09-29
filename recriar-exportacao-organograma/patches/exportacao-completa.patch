@@ -1,0 +1,2468 @@
+diff --git a/src/1.apresentacao/views/organograma/detalhes/detalhes.test.js b/src/1.apresentacao/views/organograma/detalhes/detalhes.test.js
+index f4b0c2a5..3c6a736b 100644
+--- a/src/1.apresentacao/views/organograma/detalhes/detalhes.test.js
++++ b/src/1.apresentacao/views/organograma/detalhes/detalhes.test.js
+@@ -20,9 +20,11 @@ vi.mock('@vue-flow/core', async (importOriginal) => {
+       setCenter: vi.fn(),
+       findNode: vi.fn(),
+       getNodes: [],
++      nodes: [],
+       applyNodeChanges: vi.fn((changes) => changes),
+       getViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
+       setViewport: vi.fn(),
++      onlyRenderVisibleElements: true,
+     })),
+   }
+ })
+@@ -679,6 +681,63 @@ describe('detalhes-organograma', () => {
+       })
+       expect(resultado.pixelRatio).toBe(3.5)
+     })
++
++    it('deve capturar em zoom 1 usando a caixa delimitadora dos nos (independente do tamanho em tela do container), quando houver nos', async () => {
++      const setViewportMock = vi.fn()
++      const getViewportMock = vi.fn(() => ({ x: 5, y: 5, zoom: 0.6 }))
++      useVueFlow.mockReturnValueOnce({
++        updateNodeInternals: vi.fn(),
++        fitView: vi.fn(),
++        setCenter: vi.fn(),
++        findNode: vi.fn(),
++        getNodes: [
++          { id: '1', position: { x: 0, y: 0 }, dimensions: { width: 180, height: 90 } },
++          { id: '2', position: { x: 300, y: 200 }, dimensions: { width: 180, height: 90 } },
++        ],
++        nodes: [
++          { id: '1', position: { x: 0, y: 0 }, dimensions: { width: 180, height: 90 } },
++          { id: '2', position: { x: 300, y: 200 }, dimensions: { width: 180, height: 90 } },
++        ],
++        applyNodeChanges: vi.fn(),
++        getViewport: getViewportMock,
++        setViewport: setViewportMock,
++        onlyRenderVisibleElements: true,
++      })
++      wrapper = await createWrapper()
++      await flushPromises()
++
++      const fakeCanvas = {}
++      toCanvas.mockResolvedValue(fakeCanvas)
++      const container = wrapper.vm.$refs.containerRef
++
++      const resultado = await wrapper.vm.capturarComoImagem(2)
++
++      // Ajusta a viewport para zoom 1, posicionando a caixa delimitadora
++      // (que começa em x=0,y=0) a partir do padding de captura.
++      expect(setViewportMock).toHaveBeenNthCalledWith(1, { x: 40, y: 40, zoom: 1 }, { duration: 0 })
++      expect(toCanvas).toHaveBeenCalledWith(
++        container,
++        expect.objectContaining({ width: 480 + 80, height: 290 + 80, pixelRatio: 2 }),
++      )
++      // Restaura a viewport original apos a captura.
++      expect(setViewportMock).toHaveBeenNthCalledWith(2, { x: 5, y: 5, zoom: 0.6 }, { duration: 0 })
++      expect(resultado).toEqual({ canvas: fakeCanvas, width: 560, height: 370, pixelRatio: 2 })
++    })
++
++    it('nao deve alterar a viewport quando nao houver nos (fallback para o tamanho do container)', async () => {
++      wrapper = await createWrapper()
++      await flushPromises()
++
++      const fakeCanvas = {}
++      toCanvas.mockResolvedValue(fakeCanvas)
++      const container = wrapper.vm.$refs.containerRef
++
++      await wrapper.vm.capturarComoImagem()
++
++      const opcoes = toCanvas.mock.calls[0][1]
++      expect(opcoes.width).toBeUndefined()
++      expect(opcoes.height).toBeUndefined()
++    })
+   })
+ 
+   describe('corFundo (seletor de cor de fundo)', () => {
+@@ -961,6 +1020,86 @@ describe('detalhes-organograma', () => {
+ 
+       expect(resultado).toBeNull()
+     })
++
++    it('deve calcular as dimensoes a partir da caixa delimitadora dos nos (posicao/tamanho), nao do tamanho em tela do container', async () => {
++      useVueFlow.mockReturnValueOnce({
++        updateNodeInternals: vi.fn(),
++        fitView: vi.fn(),
++        setCenter: vi.fn(),
++        findNode: vi.fn(),
++        getNodes: [
++          { id: '1', position: { x: 0, y: 0 }, dimensions: { width: 180, height: 90 } },
++          { id: '2', position: { x: 300, y: 200 }, dimensions: { width: 180, height: 90 } },
++        ],
++        nodes: [
++          { id: '1', position: { x: 0, y: 0 }, dimensions: { width: 180, height: 90 } },
++          { id: '2', position: { x: 300, y: 200 }, dimensions: { width: 180, height: 90 } },
++        ],
++        applyNodeChanges: vi.fn(),
++        getViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
++        setViewport: vi.fn(),
++        onlyRenderVisibleElements: true,
++      })
++      wrapper = await createWrapper()
++      await flushPromises()
++
++      const resultado = wrapper.vm.obterDimensaoContainer()
++
++      // largura/altura = extensao real dos nos (300+180=480, 200+90=290) + 2x padding (40).
++      expect(resultado).toEqual({ width: 480 + 80, height: 290 + 80 })
++    })
++  })
++
++  describe('obterCaixaDelimitadora', () => {
++    it('deve retornar null quando nao houver nos', () => {
++      wrapper = createWrapper()
++
++      expect(wrapper.vm.obterCaixaDelimitadora()).toBeNull()
++    })
++
++    it('deve calcular a caixa delimitadora considerando posicao e dimensoes de todos os nos', async () => {
++      useVueFlow.mockReturnValueOnce({
++        updateNodeInternals: vi.fn(),
++        fitView: vi.fn(),
++        setCenter: vi.fn(),
++        findNode: vi.fn(),
++        getNodes: [
++          { id: '1', position: { x: 10, y: 20 }, dimensions: { width: 180, height: 90 } },
++          { id: '2', position: { x: -50, y: 100 }, dimensions: { width: 180, height: 90 } },
++        ],
++        nodes: [
++          { id: '1', position: { x: 10, y: 20 }, dimensions: { width: 180, height: 90 } },
++          { id: '2', position: { x: -50, y: 100 }, dimensions: { width: 180, height: 90 } },
++        ],
++        applyNodeChanges: vi.fn(),
++        getViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
++        setViewport: vi.fn(),
++        onlyRenderVisibleElements: true,
++      })
++      wrapper = await createWrapper()
++      await flushPromises()
++
++      expect(wrapper.vm.obterCaixaDelimitadora()).toEqual({ x: -50, y: 20, width: 240, height: 170 })
++    })
++
++    it('deve usar as dimensoes padrao (NODE_WIDTH/NODE_HEIGHT) quando o no ainda nao possuir dimensions medidas', async () => {
++      useVueFlow.mockReturnValueOnce({
++        updateNodeInternals: vi.fn(),
++        fitView: vi.fn(),
++        setCenter: vi.fn(),
++        findNode: vi.fn(),
++        getNodes: [{ id: '1', position: { x: 0, y: 0 } }],
++        nodes: [{ id: '1', position: { x: 0, y: 0 } }],
++        applyNodeChanges: vi.fn(),
++        getViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
++        setViewport: vi.fn(),
++        onlyRenderVisibleElements: true,
++      })
++      wrapper = await createWrapper()
++      await flushPromises()
++
++      expect(wrapper.vm.obterCaixaDelimitadora()).toEqual({ x: 0, y: 0, width: 200, height: 90 })
++    })
+   })
+ 
+   describe('watch nodes', () => {
+diff --git a/src/1.apresentacao/views/organograma/detalhes/detalhes.vue b/src/1.apresentacao/views/organograma/detalhes/detalhes.vue
+index e4d41d92..4d878800 100644
+--- a/src/1.apresentacao/views/organograma/detalhes/detalhes.vue
++++ b/src/1.apresentacao/views/organograma/detalhes/detalhes.vue
+@@ -39,6 +39,11 @@ const INITIAL_VISIBLE_LEVELS = 2
+ // salvo para a unidade pesquisada (ver resetarLayout/listar.vue).
+ const COR_FUNDO_PADRAO = '#ffffff'
+ 
++// Margem (em px, espaço do fluxo) ao redor do conteúdo real do organograma
++// ao medir/capturar para exportação — evita cortar bordas/sombras dos nós
++// nas extremidades da árvore.
++const CAPTURA_PADDING_PX = 40
++
+ // Quebra o texto em múltiplas linhas, cortando sempre no espaço anterior
+ // ao limite de caracteres por linha (sem truncar o texto original).
+ function quebrarTexto(texto, limite) {
+@@ -183,9 +188,16 @@ export default {
+       setCenter,
+       findNode,
+       getNodes,
++      // Lista bruta de nós do fluxo (sem o filtro de "só renderizar
++      // visíveis"), usada na captura de exportação para medir/renderizar a
++      // árvore inteira independente do que está no viewport atual em tela.
++      // Renomeada (nosDoFluxo) para não colidir com a prop `nodes` do
++      // componente (itens de domínio recebidos de fora).
++      nodes: nosDoFluxo,
+       applyNodeChanges,
+       getViewport,
+       setViewport,
++      onlyRenderVisibleElements,
+     } = useVueFlow('org-chart-flow')
+     return {
+       updateNodeInternals,
+@@ -193,9 +205,11 @@ export default {
+       setCenter,
+       findNode,
+       getNodes,
++      nosDoFluxo,
+       applyNodeChanges,
+       getViewport,
+       setViewport,
++      onlyRenderVisibleElements,
+     }
+   },
+   data() {
+@@ -258,20 +272,66 @@ export default {
+     })
+   },
+   methods: {
+-    // Dimensões do container (em px lógicos/CSS), sem disparar nenhuma
+-    // captura — usado pela exportação para calcular o pixelRatio ideal
+-    // antes de rasterizar.
++    // Caixa delimitadora (bounding box) do conteúdo real do organograma, em
++    // espaço do fluxo (posição/tamanho dos nós — independente do zoom/pan
++    // atual e do tamanho da janela do navegador). Usada como medida estável
++    // do "tamanho do organograma" para a exportação, ao invés do tamanho em
++    // tela do container (que muda conforme a largura da janela, já que o
++    // fitView sempre reajusta o zoom para caber no container disponível).
++    // Usa a lista BRUTA de nós (this.nosDoFluxo), não this.getNodes: quando
++    // only-render-visible-elements está ativo (padrão, para performance na
++    // tela), getNodes só devolve os nós dentro da caixa atualmente visível
++    // no container — que encolhe com a janela do navegador. Medir por essa
++    // lista filtrada fazia a caixa (e, por consequência, a pré-visualização
++    // e a paginação do PDF) mudar conforme o tamanho da janela.
++    obterCaixaDelimitadora() {
++      const nos = this.nosDoFluxo
++      if (!nos || nos.length === 0) return null
++
++      let minX = Infinity
++      let minY = Infinity
++      let maxX = -Infinity
++      let maxY = -Infinity
++
++      nos.forEach((no) => {
++        const largura = no.dimensions?.width || NODE_WIDTH
++        const altura = no.dimensions?.height || NODE_HEIGHT
++        minX = Math.min(minX, no.position.x)
++        minY = Math.min(minY, no.position.y)
++        maxX = Math.max(maxX, no.position.x + largura)
++        maxY = Math.max(maxY, no.position.y + altura)
++      })
++
++      return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
++    },
++    // Dimensões do organograma (em px lógicos), sem disparar nenhuma
++    // captura — usado pela exportação para calcular o pixelRatio ideal e a
++    // escala/paginação antes de rasterizar. Deriva da caixa delimitadora dos
++    // nós (espaço do fluxo), não do container em tela: este último varia
++    // com o tamanho da janela do navegador, o que fazia a pré-visualização
++    // e a paginação do PDF mudarem conforme a janela estivesse maximizada
++    // ou não. Só recorre ao tamanho do container quando não há nós (ex.:
++    // organograma vazio).
+     obterDimensaoContainer() {
+       const container = this.$refs.containerRef
+-      return container ? { width: container.clientWidth, height: container.clientHeight } : null
++      if (!container) return null
++
++      const caixa = this.obterCaixaDelimitadora()
++      if (caixa) {
++        return {
++          width: caixa.width + CAPTURA_PADDING_PX * 2,
++          height: caixa.height + CAPTURA_PADDING_PX * 2,
++        }
++      }
++
++      return { width: container.clientWidth, height: container.clientHeight }
+     },
+-    // Captura exatamente o que está na tela agora (zoom/pan/nós expandidos
+-    // atuais) para servir de base à exportação em PDF/JPG. Usa html-to-image
+-    // (recomendado pelo próprio Vue Flow para exportar o gráfico) em vez de
+-    // html2canvas: este último não renderiza corretamente os <svg> das
+-    // arestas — que o Vue Flow dimensiona só via CSS, sem width/height
+-    // explícitos — nem o ícone de fonte (bi-chevron) do botão de
+-    // expandir/recolher.
++    // Captura o organograma para servir de base à exportação em PDF/JPG.
++    // Usa html-to-image (recomendado pelo próprio Vue Flow para exportar o
++    // gráfico) em vez de html2canvas: este último não renderiza
++    // corretamente os <svg> das arestas — que o Vue Flow dimensiona só via
++    // CSS, sem width/height explícitos — nem o ícone de fonte (bi-chevron)
++    // do botão de expandir/recolher.
+     async capturarComoImagem(pixelRatio = 1) {
+       const container = this.$refs.containerRef
+       if (!container) {
+@@ -282,33 +342,92 @@ export default {
+       // Evita capturar um frame no meio da animação de centralizarFlow/centralizarNo.
+       await this.$nextTick()
+ 
+-      // pixelRatio > 1 faz o html-to-image rasterizar o DOM (texto, SVGs das
+-      // arestas) diretamente em maior densidade — é isso que garante nitidez
+-      // real na exportação, e não um upscale posterior do bitmap. Quem chama
+-      // calcula o pixelRatio seguro (calculateOptimalScale, em listar.vue)
+-      // antes de invocar este método.
+-      // filter exclui os Controls (zoom in/out/fit) da imagem exportada —
+-      // eles ficam visíveis na tela, mas não fazem sentido no PDF/JPG.
+-      const canvas = await toCanvas(container, {
+-        backgroundColor: this.corFundo,
+-        pixelRatio,
+-        cacheBust: true,
+-        // Exclui da imagem exportada os Controls (zoom/fit) e as alças do
+-        // NodeResizer, que podem estar visíveis num nó selecionado.
+-        filter: (node) => {
+-          const classes = node.classList
+-          return (
+-            !classes?.contains('vue-flow__controls') &&
+-            !classes?.contains('vue-flow__resize-control')
++      // Só renderizar nós visíveis (only-render-visible-elements, ligado no
++      // template para performance na tela) filtra tanto getNodes() quanto o
++      // que de fato existe no DOM pela caixa VISÍVEL do container — que
++      // encolhe com a janela do navegador. Sem desligar isso durante a
++      // captura, nós fora da área visível em tela nem chegam a ser
++      // desenhados no DOM, ficando ausentes/cortados na imagem exportada
++      // quando a janela está pequena. Restaurado no finally abaixo.
++      const onlyRenderVisibleElementsAnterior = this.onlyRenderVisibleElements
++      this.onlyRenderVisibleElements = false
++      await this.$nextTick()
++
++      // Tamanho original (inline) do container, restaurado no finally. O
++      // container normalmente segue o layout da tela (largura: 100% da
++      // janela, altura fixa) e o wrapper interno do Vue Flow (.vue-flow)
++      // tem overflow: hidden — se o container ficar menor que o conteúdo
++      // (janela pequena), a captura recorta o organograma mesmo com os nós
++      // presentes no DOM. Redimensionar o container para caber o conteúdo
++      // inteiro antes de capturar garante o mesmo resultado independente do
++      // tamanho da janela.
++      const larguraOriginal = container.style.width
++      const alturaOriginal = container.style.height
++
++      try {
++        // Captura sempre em escala natural (zoom 1), independente do zoom
++        // atual da tela — que varia conforme o tamanho da janela do
++        // navegador (fitView reajusta o zoom para caber no container). Sem
++        // isso, o mesmo organograma gerava imagens/paginação diferentes
++        // dependendo do tamanho da janela ao exportar.
++        const caixa = this.obterCaixaDelimitadora()
++        const viewportAnterior = caixa ? this.getViewport?.() : null
++
++        const largura = caixa ? caixa.width + CAPTURA_PADDING_PX * 2 : container.clientWidth
++        const altura = caixa ? caixa.height + CAPTURA_PADDING_PX * 2 : container.clientHeight
++
++        if (caixa) {
++          container.style.width = `${largura}px`
++          container.style.height = `${altura}px`
++
++          this.setViewport(
++            { x: CAPTURA_PADDING_PX - caixa.x, y: CAPTURA_PADDING_PX - caixa.y, zoom: 1 },
++            { duration: 0 },
+           )
+-        },
+-      })
++          await this.$nextTick()
++        }
+ 
+-      return {
+-        canvas,
+-        width: container.clientWidth,
+-        height: container.clientHeight,
+-        pixelRatio,
++        // pixelRatio > 1 faz o html-to-image rasterizar o DOM (texto, SVGs das
++        // arestas) diretamente em maior densidade — é isso que garante nitidez
++        // real na exportação, e não um upscale posterior do bitmap. Quem chama
++        // calcula o pixelRatio seguro (calculateOptimalScale, em listar.vue)
++        // antes de invocar este método.
++        // filter exclui os Controls (zoom in/out/fit) da imagem exportada —
++        // eles ficam visíveis na tela, mas não fazem sentido no PDF/JPG.
++        const canvas = await toCanvas(container, {
++          backgroundColor: this.corFundo,
++          pixelRatio,
++          cacheBust: true,
++          // Força a captura a corresponder à caixa delimitadora do conteúdo
++          // (em vez do tamanho atual, em tela, do container) — garante que a
++          // imagem gerada seja sempre a mesma para o mesmo organograma,
++          // independente do tamanho da janela do navegador.
++          ...(caixa ? { width: largura, height: altura } : {}),
++          // Exclui da imagem exportada os Controls (zoom/fit) e as alças do
++          // NodeResizer, que podem estar visíveis num nó selecionado.
++          filter: (node) => {
++            const classes = node.classList
++            return (
++              !classes?.contains('vue-flow__controls') &&
++              !classes?.contains('vue-flow__resize-control')
++            )
++          },
++        })
++
++        if (viewportAnterior) {
++          this.setViewport(viewportAnterior, { duration: 0 })
++        }
++
++        return {
++          canvas,
++          width: largura,
++          height: altura,
++          pixelRatio,
++        }
++      } finally {
++        container.style.width = larguraOriginal
++        container.style.height = alturaOriginal
++        this.onlyRenderVisibleElements = onlyRenderVisibleElementsAnterior
+       }
+     },
+ 
+diff --git a/src/1.apresentacao/views/organograma/listar/exportar/modalExportarOrganograma.html b/src/1.apresentacao/views/organograma/listar/exportar/modalExportarOrganograma.html
+new file mode 100644
+index 00000000..01466802
+--- /dev/null
++++ b/src/1.apresentacao/views/organograma/listar/exportar/modalExportarOrganograma.html
+@@ -0,0 +1,140 @@
++<div v-if="visivel" class="modal fade show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
++  <div class="modal-dialog modal-dialog-centered modal-xl">
++    <div class="modal-content">
++
++      <div class="modal-header">
++        <h4 class="modal-title">Exportar organograma</h4>
++        <button type="button" class="modal-close-btn" @click="fechar">&times;</button>
++      </div>
++
++      <div class="modal-body">
++        <div class="row g-4">
++
++          <!-- Coluna de parâmetros -->
++          <div class="col-12 col-lg-5">
++            <div class="row g-3">
++              <div class="col-6">
++                <label for="exportarPapel" class="form-label">Tamanho do papel</label>
++                <select id="exportarPapel" class="form-control" v-model="papel">
++                  <option value="A4">A4</option>
++                  <option value="A3">A3</option>
++                  <option value="A2">A2</option>
++                </select>
++              </div>
++              <div class="col-6">
++                <label for="exportarOrientacao" class="form-label">Orientação</label>
++                <select id="exportarOrientacao" class="form-control" v-model="orientacao">
++                  <option value="automatica">Automática</option>
++                  <option value="retrato">Retrato</option>
++                  <option value="paisagem">Paisagem</option>
++                </select>
++              </div>
++            </div>
++
++            <fieldset class="mt-3">
++              <legend class="form-label h6">Modo de ajuste</legend>
++              <div class="form-check">
++                <input class="form-check-input" type="radio" id="modoAutomatico" value="automatico" v-model="modoAjuste">
++                <label class="form-check-label" for="modoAutomatico">Melhor ajuste automático</label>
++              </div>
++              <div class="form-check">
++                <input class="form-check-input" type="radio" id="modoPiso" value="pisoLegibilidade" v-model="modoAjuste">
++                <label class="form-check-label" for="modoPiso">Ajustar à página com piso de legibilidade</label>
++              </div>
++              <div class="form-check">
++                <input class="form-check-input" type="radio" id="modoUmaFolha" value="umaFolha" v-model="modoAjuste">
++                <label class="form-check-label" for="modoUmaFolha">Ajustar à página (1 folha)</label>
++              </div>
++              <div class="form-check">
++                <input class="form-check-input" type="radio" id="modoManterPaginar" value="manterPaginar" v-model="modoAjuste">
++                <label class="form-check-label" for="modoManterPaginar">Manter legível e paginar</label>
++              </div>
++            </fieldset>
++
++            <div class="mt-3">
++              <label class="form-label h6 d-block">Formato</label>
++              <div class="btn-group" role="group">
++                <button type="button"
++                        class="btn"
++                        :class="formato === 'pdf' ? 'btn-primary' : 'btn-outline-secondary'"
++                        @click="formato = 'pdf'">
++                  PDF
++                </button>
++                <button type="button"
++                        class="btn"
++                        :class="formato === 'jpg' ? 'btn-primary' : 'btn-outline-secondary'"
++                        @click="formato = 'jpg'">
++                  JPG
++                </button>
++              </div>
++            </div>
++
++            <div class="alert alert-secondary mt-3 mb-0">
++              <strong>{{ resumoTexto }}</strong>
++              <div class="text-muted small mt-1">{{ descricaoModoAjuste }}</div>
++              <div v-if="formatoNaoPagina" class="text-muted small mt-1">
++                JPG é sempre exportado em um único arquivo (sem paginação).
++              </div>
++              <div class="text-muted small mt-1">{{ conteudoTexto }}</div>
++            </div>
++          </div>
++
++          <!-- Coluna de pré-visualização -->
++          <div class="col-12 col-lg-7">
++            <div class="d-flex justify-content-between align-items-center mb-2">
++              <span class="text-uppercase text-muted small fw-bold">
++                Pré-visualização do {{ formato === 'pdf' ? 'PDF' : 'JPG' }}
++              </span>
++              <div v-if="totalFolhas > 1" class="d-flex align-items-center gap-2">
++                <button type="button" class="btn btn-sm btn-outline-secondary" :disabled="paginaAtual === 0" @click="irParaPagina(paginaAtual - 1)">‹</button>
++                <span class="small">Folha {{ paginaAtual + 1 }} de {{ totalFolhas }}</span>
++                <button type="button" class="btn btn-sm btn-outline-secondary" :disabled="paginaAtual === totalFolhas - 1" @click="irParaPagina(paginaAtual + 1)">›</button>
++              </div>
++            </div>
++
++            <div class="exportar-organograma-folha" :style="{ aspectRatio: `${papelMm.width} / ${papelMm.height}` }">
++              <div v-if="carregandoPreview" class="exportar-organograma-folha__status">Gerando pré-visualização…</div>
++              <template v-else-if="capturaPreviewUrl">
++                <img :src="capturaPreviewUrl" alt="Pré-visualização do organograma" />
++                <div class="exportar-organograma-folha__grade">
++                  <div v-for="pagina in paginas"
++                       :key="pagina"
++                       class="exportar-organograma-folha__celula"
++                       :class="{ 'exportar-organograma-folha__celula--atual': pagina === paginaAtual }"
++                       :style="{ left: `${celulasGrade[pagina].left}%`, top: `${celulasGrade[pagina].top}%`, width: `${celulasGrade[pagina].width}%`, height: `${celulasGrade[pagina].height}%` }"></div>
++                </div>
++              </template>
++              <div v-else class="exportar-organograma-folha__status">Sem pré-visualização disponível</div>
++            </div>
++
++            <div v-if="totalFolhas > 1" class="d-flex flex-wrap gap-1 mt-2">
++              <button v-for="pagina in paginas"
++                      :key="pagina"
++                      type="button"
++                      class="btn btn-sm"
++                      :class="pagina === paginaAtual ? 'btn-primary' : 'btn-outline-secondary'"
++                      @click="irParaPagina(pagina)">
++                {{ pagina + 1 }}
++              </button>
++            </div>
++
++            <div class="exportar-organograma-legenda mt-2">
++              <span class="exportar-organograma-legenda__revisao">{{ legendaRevisaoTexto }}</span>
++              <span v-if="exibirLegendaContinuacao" class="exportar-organograma-legenda__continuacao">
++                <span class="exportar-organograma-legenda__faixa"></span>
++                Faixa laranja = continua na folha seguinte
++              </span>
++            </div>
++          </div>
++
++        </div>
++      </div>
++
++      <div class="modal-footer">
++        <button type="button" class="btn btn-secondary" @click="fechar">Cancelar</button>
++        <button type="button" class="btn btn-primary" @click="confirmar">Exportar</button>
++      </div>
++
++    </div>
++  </div>
++</div>
+diff --git a/src/1.apresentacao/views/organograma/listar/exportar/modalExportarOrganograma.scss b/src/1.apresentacao/views/organograma/listar/exportar/modalExportarOrganograma.scss
+new file mode 100644
+index 00000000..e5d5d0e9
+--- /dev/null
++++ b/src/1.apresentacao/views/organograma/listar/exportar/modalExportarOrganograma.scss
+@@ -0,0 +1,70 @@
++.exportar-organograma-folha {
++  position: relative;
++  width: 100%;
++  max-height: 420px;
++  margin: 0 auto;
++  background: #fff;
++  border: 1px solid #dfe8f3;
++  box-shadow: 0 0px 6px rgba(0, 0, 0, 0.08);
++  overflow: hidden;
++
++  img {
++    width: 100%;
++    height: 100%;
++    object-fit: contain;
++    display: block;
++  }
++
++  &__status {
++    position: absolute;
++    inset: 0;
++    display: flex;
++    align-items: center;
++    justify-content: center;
++    color: #64748b;
++    font-size: 0.85rem;
++    text-align: center;
++    padding: 1rem;
++  }
++
++  &__grade {
++    position: absolute;
++    inset: 0;
++    pointer-events: none;
++  }
++
++  &__celula {
++    position: absolute;
++    box-sizing: border-box;
++    border: 1px dashed rgba(100, 116, 139, 0.35);
++
++    &--atual {
++      border: 2px dashed #f97316;
++    }
++  }
++}
++
++.exportar-organograma-legenda {
++  display: flex;
++  flex-wrap: wrap;
++  justify-content: space-between;
++  align-items: center;
++  gap: 0.5rem 1rem;
++  font-size: 0.78rem;
++  color: #64748b;
++
++  &__continuacao {
++    display: inline-flex;
++    align-items: center;
++    gap: 0.35rem;
++  }
++
++  &__faixa {
++    display: inline-block;
++    width: 10px;
++    height: 10px;
++    border-radius: 2px;
++    background: #f97316;
++    flex-shrink: 0;
++  }
++}
+diff --git a/src/1.apresentacao/views/organograma/listar/exportar/modalExportarOrganograma.test.js b/src/1.apresentacao/views/organograma/listar/exportar/modalExportarOrganograma.test.js
+new file mode 100644
+index 00000000..22ede2ef
+--- /dev/null
++++ b/src/1.apresentacao/views/organograma/listar/exportar/modalExportarOrganograma.test.js
+@@ -0,0 +1,361 @@
++import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
++import { mount } from '@vue/test-utils'
++import { nextTick } from 'vue'
++import ModalExportarOrganograma from './modalExportarOrganograma.vue'
++
++const flushPromises = () => new Promise((resolve) => setTimeout(resolve))
++
++describe('ModalExportarOrganograma', () => {
++  let wrapper
++
++  const createWrapper = (props = {}) => {
++    return mount(ModalExportarOrganograma, {
++      props: {
++        visivel: true,
++        dimensaoOrganograma: { width: 2000, height: 1000 },
++        ...props,
++      },
++    })
++  }
++
++  afterEach(() => {
++    if (wrapper) {
++      wrapper.unmount()
++      wrapper = null
++    }
++  })
++
++  describe('Renderização condicional', () => {
++    it('não deve renderizar o conteúdo quando visivel for falso', () => {
++      wrapper = createWrapper({ visivel: false })
++      expect(wrapper.find('.modal').exists()).toBe(false)
++    })
++
++    it('deve renderizar o modal quando visivel for verdadeiro', () => {
++      wrapper = createWrapper()
++      expect(wrapper.find('.modal').exists()).toBe(true)
++    })
++  })
++
++  describe('Orientação automática', () => {
++    it('deve resolver como paisagem quando a largura for maior ou igual à altura', () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 2000, height: 1000 } })
++      expect(wrapper.vm.orientacaoResolvida).toBe('paisagem')
++    })
++
++    it('deve resolver como retrato quando a altura for maior que a largura', () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 500, height: 2000 } })
++      expect(wrapper.vm.orientacaoResolvida).toBe('retrato')
++    })
++
++    it('deve respeitar a orientação explícita, ignorando o cálculo automático', async () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 2000, height: 1000 } })
++      wrapper.vm.orientacao = 'retrato'
++      await nextTick()
++      expect(wrapper.vm.orientacaoResolvida).toBe('retrato')
++    })
++  })
++
++  describe('Modo de ajuste — umaFolha', () => {
++    it('deve manter 1 folha mesmo quando a escala de ajuste for baixa', async () => {
++      // Conteúdo bem maior que uma folha A4: escalaAjustarUmaPagina será baixa.
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 20000, height: 4000 } })
++      wrapper.vm.modoAjuste = 'umaFolha'
++      await nextTick()
++
++      expect(wrapper.vm.resultadoAjuste.folhas).toEqual({ cols: 1, rows: 1 })
++      expect(wrapper.vm.resultadoAjuste.escala).toBeLessThan(70)
++    })
++  })
++
++  describe('Modo de ajuste — pisoLegibilidade', () => {
++    it('não deve paginar quando o ajuste a uma folha já respeita o piso de 70%', async () => {
++      // Conteúdo pequeno o suficiente para caber em 1 folha A4 com escala >= 70%.
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 600, height: 400 } })
++      wrapper.vm.modoAjuste = 'pisoLegibilidade'
++      await nextTick()
++
++      expect(wrapper.vm.resultadoAjuste.folhas).toEqual({ cols: 1, rows: 1 })
++      expect(wrapper.vm.resultadoAjuste.escala).toBeGreaterThanOrEqual(70)
++    })
++
++    it('deve paginar em 70% quando o ajuste a uma folha ficaria abaixo do piso', async () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 20000, height: 4000 } })
++      wrapper.vm.modoAjuste = 'pisoLegibilidade'
++      await nextTick()
++
++      expect(wrapper.vm.resultadoAjuste.escala).toBe(70)
++      expect(wrapper.vm.resultadoAjuste.folhas.cols * wrapper.vm.resultadoAjuste.folhas.rows).toBeGreaterThan(1)
++    })
++  })
++
++  describe('Modo de ajuste — manterPaginar', () => {
++    it('deve manter escala 100% e paginar conforme necessário', async () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 20000, height: 4000 } })
++      wrapper.vm.modoAjuste = 'manterPaginar'
++      await nextTick()
++
++      expect(wrapper.vm.resultadoAjuste.escala).toBe(100)
++      expect(wrapper.vm.resultadoAjuste.folhas.cols * wrapper.vm.resultadoAjuste.folhas.rows).toBeGreaterThan(1)
++    })
++  })
++
++  describe('Reserva de espaço da legenda (mostrarLegenda)', () => {
++    it('deve reduzir a área útil e aumentar as folhas quando mostrarLegenda for true', async () => {
++      // Altura de conteúdo escolhida para caber em 1 folha sem legenda, mas
++      // exigir 2 quando o espaço da legenda é reservado — mesma reserva
++      // usada pela geração real do PDF em listar.vue.
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 378, height: 931 }, mostrarLegenda: false })
++      wrapper.vm.orientacao = 'retrato'
++      wrapper.vm.modoAjuste = 'manterPaginar'
++      await nextTick()
++
++      expect(wrapper.vm.resultadoAjuste.folhas).toEqual({ cols: 1, rows: 1 })
++
++      await wrapper.setProps({ mostrarLegenda: true })
++      await nextTick()
++
++      expect(wrapper.vm.resultadoAjuste.folhas).toEqual({ cols: 1, rows: 2 })
++    })
++  })
++
++  describe('Grade de pré-visualização (celulasGrade)', () => {
++    it('deve gerar folhas de tamanho desigual quando o conteúdo não é múltiplo exato da área da folha', async () => {
++      // Escolhido para gerar cols=2 com uma divisão bem distante de 50/50
++      // (a última folha recebe só o restante) — reproduz o cenário do bug
++      // relatado, em que a pré-visualização mostrava uma divisão igual mas o
++      // PDF real recortava de forma desigual.
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 1633, height: 600 } })
++      wrapper.vm.orientacao = 'paisagem'
++      wrapper.vm.modoAjuste = 'manterPaginar'
++      await nextTick()
++
++      expect(wrapper.vm.resultadoAjuste.folhas).toEqual({ cols: 2, rows: 1 })
++      expect(wrapper.vm.celulasGrade).toHaveLength(2)
++
++      const [primeira, segunda] = wrapper.vm.celulasGrade
++      // Primeira folha ocupa a fatia cheia da página; a segunda (última)
++      // recebe apenas o restante — por isso as larguras não são iguais.
++      expect(primeira.width).not.toBeCloseTo(50, 0)
++      expect(primeira.left).toBe(0)
++      expect(segunda.left).toBeCloseTo(primeira.width, 5)
++      expect(primeira.width + segunda.width).toBeCloseTo(100, 5)
++    })
++
++    it('deve gerar folhas de tamanho igual quando o conteúdo divide exatamente a área da folha', async () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 2000, height: 1000 } })
++      wrapper.vm.modoAjuste = 'umaFolha'
++      await nextTick()
++
++      expect(wrapper.vm.resultadoAjuste.folhas).toEqual({ cols: 1, rows: 1 })
++      expect(wrapper.vm.celulasGrade).toEqual([{ left: 0, top: 0, width: 100, height: 100 }])
++    })
++  })
++
++  describe('Modo de ajuste — automatico', () => {
++    it('deve se comportar como pisoLegibilidade quando a paginação resultante for aceitável', async () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 4000, height: 1200 } })
++      wrapper.vm.modoAjuste = 'automatico'
++      const resultadoPiso = wrapper.vm.calcularAjuste('pisoLegibilidade')
++      await nextTick()
++
++      expect(wrapper.vm.resultadoAjuste).toEqual(resultadoPiso)
++    })
++
++    it('deve preferir 1 folha (abaixo do piso) quando a paginação com piso geraria folhas demais', async () => {
++      // Conteúdo extremamente alongado: pisoLegibilidade geraria dezenas de folhas.
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 100000, height: 20000 } })
++      wrapper.vm.modoAjuste = 'automatico'
++      await nextTick()
++
++      expect(wrapper.vm.resultadoAjuste.folhas).toEqual({ cols: 1, rows: 1 })
++      expect(wrapper.vm.resultadoAjuste.escala).toBe(wrapper.vm.escalaAjustarUmaPagina)
++    })
++  })
++
++  describe('Formato JPG', () => {
++    it('nunca deve paginar, independente do modo de ajuste selecionado', async () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 20000, height: 4000 } })
++      wrapper.vm.formato = 'jpg'
++      wrapper.vm.modoAjuste = 'manterPaginar'
++      await nextTick()
++
++      expect(wrapper.vm.resultadoAjuste.folhas).toEqual({ cols: 1, rows: 1 })
++      expect(wrapper.vm.totalFolhas).toBe(1)
++    })
++  })
++
++  describe('Legenda de revisão e continuação', () => {
++    it('deve exibir a data de hoje e o formato PDF quando o formato selecionado for pdf', async () => {
++      wrapper = createWrapper()
++      wrapper.vm.formato = 'pdf'
++      await nextTick()
++
++      const dataFormatada = new Date().toLocaleDateString('pt-BR', {
++        day: '2-digit',
++        month: '2-digit',
++        year: 'numeric',
++      })
++
++      expect(wrapper.vm.legendaRevisaoTexto).toBe(
++        `Revisão: ${dataFormatada} · PDF ${wrapper.vm.resolucaoDpi} dpi, uma imagem por folha`,
++      )
++    })
++
++    it('deve exibir o formato JPG quando o formato selecionado for jpg', async () => {
++      wrapper = createWrapper()
++      wrapper.vm.formato = 'jpg'
++      await nextTick()
++
++      expect(wrapper.vm.legendaRevisaoTexto).toContain(`JPG ${wrapper.vm.resolucaoDpi} dpi, uma imagem por folha`)
++    })
++
++    it('deve atualizar a data de referência para a data atual sempre que o modal for reaberto', async () => {
++      wrapper = createWrapper({ visivel: false })
++      await nextTick()
++
++      const dataAntiga = new Date('2020-01-01T12:00:00Z')
++      wrapper.vm.dataReferencia = dataAntiga
++
++      await wrapper.setProps({ visivel: true })
++      await nextTick()
++
++      const hoje = new Date().toLocaleDateString('pt-BR', {
++        day: '2-digit',
++        month: '2-digit',
++        year: 'numeric',
++      })
++
++      expect(wrapper.vm.dataReferencia).not.toBe(dataAntiga)
++      expect(wrapper.vm.legendaRevisaoTexto).toContain(`Revisão: ${hoje}`)
++    })
++
++    it('deve aumentar o dpi calculado quando a escala de ajuste diminuir', async () => {
++      // Conteúdo grande o bastante para forçar uma escala bem menor que 100%.
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 20000, height: 4000 } })
++      wrapper.vm.modoAjuste = 'umaFolha'
++      await nextTick()
++
++      const escala = wrapper.vm.resultadoAjuste.escala
++      expect(escala).toBeLessThan(100)
++      expect(wrapper.vm.resolucaoDpi).toBe(Math.round(96 * (100 / escala)))
++      expect(wrapper.vm.resolucaoDpi).toBeGreaterThan(96)
++    })
++
++    it('não deve exibir a legenda de continuação quando o conteúdo couber em 1 folha', async () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 600, height: 400 } })
++      wrapper.vm.modoAjuste = 'umaFolha'
++      await nextTick()
++
++      expect(wrapper.vm.exibirLegendaContinuacao).toBe(false)
++      expect(wrapper.find('.exportar-organograma-legenda__continuacao').exists()).toBe(false)
++    })
++
++    it('deve exibir a legenda de continuação quando o conteúdo exigir mais de 1 folha', async () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 20000, height: 4000 } })
++      wrapper.vm.modoAjuste = 'manterPaginar'
++      await nextTick()
++
++      expect(wrapper.vm.exibirLegendaContinuacao).toBe(true)
++      const continuacao = wrapper.find('.exportar-organograma-legenda__continuacao')
++      expect(continuacao.exists()).toBe(true)
++      expect(continuacao.text()).toContain('Faixa laranja = continua na folha seguinte')
++    })
++  })
++
++  describe('Eventos', () => {
++    it('deve emitir close ao cancelar', async () => {
++      wrapper = createWrapper()
++      await wrapper.find('.modal-footer .btn-secondary').trigger('click')
++      expect(wrapper.emitted('close')).toBeTruthy()
++    })
++
++    it('deve emitir confirmar com os parâmetros calculados', async () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 600, height: 400 } })
++      wrapper.vm.papel = 'A3'
++      wrapper.vm.orientacao = 'retrato'
++      wrapper.vm.modoAjuste = 'pisoLegibilidade'
++      await nextTick()
++
++      await wrapper.find('.modal-footer .btn-primary').trigger('click')
++
++      expect(wrapper.emitted('confirmar')).toBeTruthy()
++      expect(wrapper.emitted('confirmar')[0][0]).toEqual({
++        formato: 'pdf',
++        papel: 'A3',
++        orientacao: 'retrato',
++        modoAjuste: 'pisoLegibilidade',
++        escala: wrapper.vm.resultadoAjuste.escala,
++        folhas: wrapper.vm.resultadoAjuste.folhas,
++      })
++    })
++  })
++
++  describe('Pré-visualização', () => {
++    it('deve chamar capturarPreview ao abrir o modal e usar a imagem retornada', async () => {
++      const capturarPreview = vi.fn().mockResolvedValue({
++        canvas: { toDataURL: () => 'data:image/png;base64,mock' },
++      })
++      wrapper = createWrapper({ visivel: false, capturarPreview })
++      await wrapper.setProps({ visivel: true })
++      await flushPromises()
++
++      expect(capturarPreview).toHaveBeenCalledWith(1)
++      expect(wrapper.vm.capturaPreviewUrl).toBe('data:image/png;base64,mock')
++    })
++
++    it('deve tratar falha na captura sem lançar erro, mantendo a pré-visualização vazia', async () => {
++      const capturarPreview = vi.fn().mockRejectedValue(new Error('falha'))
++      wrapper = createWrapper({ visivel: false, capturarPreview })
++      await wrapper.setProps({ visivel: true })
++      await flushPromises()
++
++      expect(wrapper.vm.capturaPreviewUrl).toBeNull()
++      expect(wrapper.vm.carregandoPreview).toBe(false)
++    })
++
++    it('não deve chamar capturarPreview quando a função não for informada', async () => {
++      wrapper = createWrapper({ visivel: false, capturarPreview: null })
++      await wrapper.setProps({ visivel: true })
++      await flushPromises()
++
++      expect(wrapper.vm.capturaPreviewUrl).toBeNull()
++    })
++  })
++
++  describe('Navegação de páginas', () => {
++    it('deve trocar a página atual dentro dos limites válidos', async () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 20000, height: 4000 } })
++      wrapper.vm.modoAjuste = 'manterPaginar'
++      await nextTick()
++
++      expect(wrapper.vm.totalFolhas).toBeGreaterThan(1)
++      wrapper.vm.irParaPagina(1)
++      expect(wrapper.vm.paginaAtual).toBe(1)
++    })
++
++    it('não deve trocar a página quando o índice for inválido', async () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 20000, height: 4000 } })
++      wrapper.vm.modoAjuste = 'manterPaginar'
++      await nextTick()
++
++      wrapper.vm.irParaPagina(-1)
++      expect(wrapper.vm.paginaAtual).toBe(0)
++
++      wrapper.vm.irParaPagina(999)
++      expect(wrapper.vm.paginaAtual).toBe(0)
++    })
++
++    it('deve reiniciar a página atual ao trocar o papel ou o modo de ajuste', async () => {
++      wrapper = createWrapper({ dimensaoOrganograma: { width: 20000, height: 4000 } })
++      wrapper.vm.modoAjuste = 'manterPaginar'
++      await nextTick()
++      wrapper.vm.irParaPagina(1)
++      expect(wrapper.vm.paginaAtual).toBe(1)
++
++      wrapper.vm.papel = 'A3'
++      await nextTick()
++      expect(wrapper.vm.paginaAtual).toBe(0)
++    })
++  })
++})
+diff --git a/src/1.apresentacao/views/organograma/listar/exportar/modalExportarOrganograma.vue b/src/1.apresentacao/views/organograma/listar/exportar/modalExportarOrganograma.vue
+new file mode 100644
+index 00000000..696b7942
+--- /dev/null
++++ b/src/1.apresentacao/views/organograma/listar/exportar/modalExportarOrganograma.vue
+@@ -0,0 +1,319 @@
++<template src="./modalExportarOrganograma.html"></template>
++
++<script>
++// 1 px CSS a 96dpi convertido para milímetros físicos — mesma referência usada
++// para calcular quantas folhas físicas o organograma ocupa.
++const MM_PER_PX = 25.4 / 96
++
++// Margem física (mm) aplicada nas quatro bordas de cada folha.
++const MARGEM_MM = 15
++
++// Piso de legibilidade (%): abaixo disso o texto do organograma fica pequeno
++// demais para leitura confortável no papel — os modos que respeitam o piso
++// preferem paginar a encolher além dele.
++const LEGIBILIDADE_MINIMA = 70
++
++// Acima desse número de folhas, o modo "Melhor ajuste automático" prefere
++// aceitar uma escala abaixo do piso de legibilidade a gerar tantas páginas.
++const MAX_FOLHAS_ACEITAVEL_MODO_AUTOMATICO = 6
++
++const PAPEL_TAMANHOS_MM = {
++  A4: { width: 210, height: 297 },
++  A3: { width: 297, height: 420 },
++  A2: { width: 420, height: 594 },
++}
++
++// Espaço (px lógicos) reservado em cada folha para cabeçalho, legenda (quando
++// exibida), rodapé e respiro interno — precisa ser IDÊNTICO ao usado por
++// listar.vue na geração real do PDF, senão a quantidade de folhas/escala
++// calculada aqui (e a pré-visualização) diverge do arquivo exportado.
++const RESERVA_CABECALHO_PX = 100
++const RESERVA_RODAPE_PX = 40
++const RESERVA_LEGENDA_PX = 24
++const RESERVA_MARGEM_PX = 20
++
++// Reaproveitados por listar.vue para a paginação física do PDF exportado,
++// mantendo uma única fonte da verdade para o tamanho dos papéis, a margem e o
++// espaço reservado a cabeçalho/legenda/rodapé.
++export { PAPEL_TAMANHOS_MM, MARGEM_MM, RESERVA_CABECALHO_PX, RESERVA_RODAPE_PX, RESERVA_LEGENDA_PX, RESERVA_MARGEM_PX }
++
++export default {
++  name: 'ModalExportarOrganograma',
++  props: {
++    visivel: { type: Boolean, default: false },
++    // Dimensões do organograma capturado (px lógicos/CSS), usadas para calcular
++    // quantas folhas físicas ele ocupa em cada papel/escala.
++    dimensaoOrganograma: {
++      type: Object,
++      default: () => ({ width: 0, height: 0 }),
++    },
++    modoSimulacao: { type: Boolean, default: false },
++    // Indica se a legenda de tipos de ação será desenhada no PDF exportado —
++    // reduz a área útil de conteúdo (e a pré-visualização) do mesmo jeito que
++    // a geração real em listar.vue.
++    mostrarLegenda: { type: Boolean, default: false },
++    // Formato pré-selecionado ao abrir (ex.: quando o usuário clica em "PDF"
++    // ou "JPG" no menu de exportação, em vez do botão genérico).
++    formatoInicial: { type: String, default: 'pdf' },
++    // Função assíncrona (pixelRatio) => { canvas, width, height }, delegada pelo
++    // componente pai (Detalhes.capturarComoImagem) — usada só para exibir a
++    // pré-visualização; a geração real do arquivo acontece em listar.vue.
++    capturarPreview: { type: Function, default: null },
++  },
++  emits: ['close', 'confirmar'],
++  data() {
++    return {
++      papel: 'A4',
++      orientacao: 'automatica', // automatica | retrato | paisagem
++      modoAjuste: 'automatico', // automatico | pisoLegibilidade | umaFolha | manterPaginar
++      formato: 'pdf', // pdf | jpg
++      paginaAtual: 0,
++      capturaPreviewUrl: null,
++      carregandoPreview: false,
++      // Capturada ao abrir o modal (ver watch de `visivel`) em vez de lida
++      // direto de `new Date()` dentro do computed: um computed só reavalia
++      // quando uma dependência reativa muda, então ler `new Date()` ali
++      // "congelaria" a legenda na data da primeira renderização em vez de
++      // atualizar a cada nova abertura do modal.
++      dataReferencia: new Date(),
++    }
++  },
++  computed: {
++    orientacaoResolvida() {
++      if (this.orientacao !== 'automatica') return this.orientacao
++      const { width = 0, height = 0 } = this.dimensaoOrganograma || {}
++      return width >= height ? 'paisagem' : 'retrato'
++    },
++    papelMm() {
++      const base = PAPEL_TAMANHOS_MM[this.papel] || PAPEL_TAMANHOS_MM.A4
++      return this.orientacaoResolvida === 'paisagem'
++        ? { width: base.height, height: base.width }
++        : { width: base.width, height: base.height }
++    },
++    areaConteudoMm() {
++      const reservaAlturaPx =
++        RESERVA_CABECALHO_PX + (this.mostrarLegenda ? RESERVA_LEGENDA_PX : 0) + RESERVA_RODAPE_PX + RESERVA_MARGEM_PX * 2
++      return {
++        width: Math.max(this.papelMm.width - MARGEM_MM * 2, 10),
++        height: Math.max(this.papelMm.height - reservaAlturaPx * MM_PER_PX, 10),
++      }
++    },
++    conteudoMm() {
++      const { width = 0, height = 0 } = this.dimensaoOrganograma || {}
++      return {
++        width: Math.max(width * MM_PER_PX, 1),
++        height: Math.max(height * MM_PER_PX, 1),
++      }
++    },
++    // Maior escala (%) que ainda cabe inteira em 1 folha, sem upscale (máx. 100%).
++    escalaAjustarUmaPagina() {
++      const proporcaoLargura = this.areaConteudoMm.width / this.conteudoMm.width
++      const proporcaoAltura = this.areaConteudoMm.height / this.conteudoMm.height
++      const escala = Math.min(proporcaoLargura, proporcaoAltura) * 100
++      return Math.max(1, Math.min(100, Math.floor(escala)))
++    },
++    resultadoAjuste() {
++      return this.calcularAjuste(this.modoAjuste)
++    },
++    totalFolhas() {
++      return this.resultadoAjuste.folhas.cols * this.resultadoAjuste.folhas.rows
++    },
++    paginas() {
++      return Array.from({ length: this.totalFolhas }, (_valor, indice) => indice)
++    },
++    // Fração (0–1) do conteúdo total que cabe em cada folha ao longo da
++    // largura/altura: igual à área útil da folha convertida para a mesma
++    // unidade do conteúdo. Espelha exatamente o recorte feito por
++    // listar.vue (fatia de tamanho fixo, restante só na última folha) —
++    // evita que a grade da pré-visualização mostre uma divisão igual quando
++    // o corte real do PDF é desigual.
++    fracaoPorFolhaLargura() {
++      const fatorEscala = this.resultadoAjuste.escala / 100
++      return Math.min(1, this.areaConteudoMm.width / fatorEscala / this.conteudoMm.width)
++    },
++    fracaoPorFolhaAltura() {
++      const fatorEscala = this.resultadoAjuste.escala / 100
++      return Math.min(1, this.areaConteudoMm.height / fatorEscala / this.conteudoMm.height)
++    },
++    // Limites (%) das divisórias internas da grade de pré-visualização — só
++    // as fronteiras entre folhas (0% e 100% ficam implícitos nas bordas do
++    // contêiner).
++    limitesColunas() {
++      return this.calcularLimites(this.resultadoAjuste.folhas.cols, this.fracaoPorFolhaLargura)
++    },
++    limitesLinhas() {
++      return this.calcularLimites(this.resultadoAjuste.folhas.rows, this.fracaoPorFolhaAltura)
++    },
++    // Um retângulo (%) por folha, na ordem linha-a-linha/coluna-a-coluna
++    // usada por listar.vue (folha = linha * cols + coluna), para desenhar a
++    // grade e destacar a folha atual sem CSS grid (que forçaria células
++    // iguais).
++    celulasGrade() {
++      const { cols, rows } = this.resultadoAjuste.folhas
++      const colunasLimites = [0, ...this.limitesColunas, 100]
++      const linhasLimites = [0, ...this.limitesLinhas, 100]
++      const celulas = []
++      for (let linha = 0; linha < rows; linha += 1) {
++        for (let coluna = 0; coluna < cols; coluna += 1) {
++          celulas.push({
++            left: colunasLimites[coluna],
++            top: linhasLimites[linha],
++            width: colunasLimites[coluna + 1] - colunasLimites[coluna],
++            height: linhasLimites[linha + 1] - linhasLimites[linha],
++          })
++        }
++      }
++      return celulas
++    },
++    resumoTexto() {
++      const orientacaoLabel = this.orientacaoResolvida === 'paisagem' ? 'paisagem' : 'retrato'
++      const plural = this.totalFolhas > 1 ? 's' : ''
++      return `${this.papel} ${orientacaoLabel} · escala ${this.resultadoAjuste.escala}% · ${this.totalFolhas} folha${plural}`
++    },
++    descricaoModoAjuste() {
++      const descricoes = {
++        automatico: 'O sistema escolhe o melhor equilíbrio entre legibilidade e número de folhas.',
++        pisoLegibilidade: `Reduz a escala para caber em 1 folha, nunca abaixo de ${LEGIBILIDADE_MINIMA}% — pagina quando necessário para manter a leitura.`,
++        umaFolha: 'Todo o organograma em uma única folha. Textos podem ficar reduzidos.',
++        manterPaginar: 'Tamanho original preservado, distribuído entre as folhas com marcas de corte.',
++      }
++      return descricoes[this.modoAjuste] || ''
++    },
++    conteudoTexto() {
++      return `${Math.round(this.conteudoMm.width)}×${Math.round(this.conteudoMm.height)} mm de conteúdo`
++    },
++    // JPG é sempre um único arquivo (sem paginação); a UI avisa essa restrição.
++    formatoNaoPagina() {
++      return this.formato === 'jpg' && this.totalFolhas <= 1
++    },
++    // Resolução efetiva (dpi) da imagem impressa em cada folha: mesma base de
++    // 96 dpi usada para converter px lógicos em mm (MM_PER_PX/conteudoMm) —
++    // quanto menor a escala escolhida, mais denso o conteúdo original fica
++    // "espremido" na folha, aumentando o dpi resultante.
++    resolucaoDpi() {
++      const escala = Math.max(this.resultadoAjuste.escala, 1)
++      return Math.round(96 * (100 / escala))
++    },
++    // Legenda inferior da pré-visualização: data de geração (hoje) + resolução
++    // e regra de montagem do arquivo — cada folha recebe uma imagem própria,
++    // igual ao que listar.vue efetivamente grava no PDF/JPG.
++    legendaRevisaoTexto() {
++      const dataFormatada = this.dataReferencia.toLocaleDateString('pt-BR', {
++        day: '2-digit',
++        month: '2-digit',
++        year: 'numeric',
++      })
++      const formatoLabel = this.formato === 'jpg' ? 'JPG' : 'PDF'
++      return `Revisão: ${dataFormatada} · ${formatoLabel} ${this.resolucaoDpi} dpi, uma imagem por folha`
++    },
++    // "Faixa laranja" só faz sentido quando o conteúdo é realmente recortado
++    // entre folhas — some quando tudo cabe em uma única folha.
++    exibirLegendaContinuacao() {
++      return this.totalFolhas > 1
++    },
++  },
++  watch: {
++    visivel(aberto) {
++      if (aberto) {
++        this.paginaAtual = 0
++        this.formato = this.formatoInicial === 'jpg' ? 'jpg' : 'pdf'
++        this.dataReferencia = new Date()
++        this.capturarPreviewAsync()
++      }
++    },
++    papel() {
++      this.paginaAtual = 0
++    },
++    orientacao() {
++      this.paginaAtual = 0
++    },
++    modoAjuste() {
++      this.paginaAtual = 0
++    },
++    formato() {
++      this.paginaAtual = 0
++    },
++  },
++  methods: {
++    // Calcula escala e paginação (cols x rows) para um modo de ajuste. JPG
++    // nunca pagina: usa sempre o comportamento de "1 folha".
++    calcularAjuste(modo) {
++      const modoEfetivo = this.formato === 'jpg' ? 'umaFolha' : modo
++
++      if (modoEfetivo === 'manterPaginar') {
++        return { escala: 100, folhas: this.calcularGrade(100) }
++      }
++
++      if (modoEfetivo === 'pisoLegibilidade') {
++        if (this.escalaAjustarUmaPagina >= LEGIBILIDADE_MINIMA) {
++          return { escala: this.escalaAjustarUmaPagina, folhas: { cols: 1, rows: 1 } }
++        }
++        return { escala: LEGIBILIDADE_MINIMA, folhas: this.calcularGrade(LEGIBILIDADE_MINIMA) }
++      }
++
++      if (modoEfetivo === 'automatico') {
++        if (this.escalaAjustarUmaPagina >= LEGIBILIDADE_MINIMA) {
++          return { escala: this.escalaAjustarUmaPagina, folhas: { cols: 1, rows: 1 } }
++        }
++        const comPiso = this.calcularGrade(LEGIBILIDADE_MINIMA)
++        if (comPiso.cols * comPiso.rows > MAX_FOLHAS_ACEITAVEL_MODO_AUTOMATICO) {
++          return { escala: this.escalaAjustarUmaPagina, folhas: { cols: 1, rows: 1 } }
++        }
++        return { escala: LEGIBILIDADE_MINIMA, folhas: comPiso }
++      }
++
++      // umaFolha (padrão)
++      return { escala: this.escalaAjustarUmaPagina, folhas: { cols: 1, rows: 1 } }
++    },
++    calcularGrade(escala) {
++      const larguraEscalada = this.conteudoMm.width * (escala / 100)
++      const alturaEscalada = this.conteudoMm.height * (escala / 100)
++      return {
++        cols: Math.max(1, Math.ceil(larguraEscalada / this.areaConteudoMm.width)),
++        rows: Math.max(1, Math.ceil(alturaEscalada / this.areaConteudoMm.height)),
++      }
++    },
++    // Posições (%) das divisórias internas de um eixo: todas as folhas,
++    // exceto a última, ocupam a mesma fração do conteúdo — a última recebe
++    // apenas o restante (pode ser menor).
++    calcularLimites(quantidade, fracaoPorFolha) {
++      const limites = []
++      for (let indice = 1; indice < quantidade; indice += 1) {
++        limites.push(Math.min(1, indice * fracaoPorFolha) * 100)
++      }
++      return limites
++    },
++    async capturarPreviewAsync() {
++      if (!this.capturarPreview) return
++      this.carregandoPreview = true
++      try {
++        const resultado = await this.capturarPreview(1)
++        this.capturaPreviewUrl = resultado?.canvas?.toDataURL ? resultado.canvas.toDataURL('image/png') : null
++      } catch {
++        this.capturaPreviewUrl = null
++      } finally {
++        this.carregandoPreview = false
++      }
++    },
++    irParaPagina(indice) {
++      if (indice < 0 || indice >= this.totalFolhas) return
++      this.paginaAtual = indice
++    },
++    fechar() {
++      this.$emit('close')
++    },
++    confirmar() {
++      this.$emit('confirmar', {
++        formato: this.formato,
++        papel: this.papel,
++        orientacao: this.orientacaoResolvida,
++        modoAjuste: this.modoAjuste,
++        escala: this.resultadoAjuste.escala,
++        folhas: this.resultadoAjuste.folhas,
++      })
++    },
++  },
++}
++</script>
++
++<style scoped src="./modalExportarOrganograma.scss" lang="scss"></style>
+diff --git a/src/1.apresentacao/views/organograma/listar/listar.html b/src/1.apresentacao/views/organograma/listar/listar.html
+index 37189051..474cfd77 100644
+--- a/src/1.apresentacao/views/organograma/listar/listar.html
++++ b/src/1.apresentacao/views/organograma/listar/listar.html
+@@ -143,7 +143,6 @@
+ 				</button>
+ 				<div v-else></div>
+ 
+-				<!-- Exportação temporariamente oculta: ainda não suportada pelo organograma em VueFlow -->
+ 				<div class="d-flex gap-2">
+ 					<div class="btn-group">
+ 						<button type="button"
+@@ -158,12 +157,12 @@
+ 						</button>
+ 						<ul class="dropdown-menu dropdown-menu-end">
+ 							<li>
+-								<a class="dropdown-item" role="button" @click="generatePdf()">
++								<a class="dropdown-item" role="button" @click="abrirModalExportar('pdf')">
+ 									<i class="bi bi-filetype-pdf text-danger me-2"></i>PDF
+ 								</a>
+ 							</li>
+ 							<li>
+-								<a class="dropdown-item" role="button" @click="generateJpg()">
++								<a class="dropdown-item" role="button" @click="abrirModalExportar('jpg')">
+ 									<i class="bi bi-filetype-jpg text-danger me-2"></i>JPG
+ 								</a>
+ 							</li>
+@@ -173,6 +172,15 @@
+ 			</div>
+ 		</div>
+ 	</div>
++
++	<ModalExportarOrganograma :visivel="mostrarModalExportar"
++														:dimensao-organograma="dimensaoOrganogramaExportacao"
++														:modo-simulacao="modoSimulacao"
++														:mostrar-legenda="mostrarLegendaExportacao"
++														:formato-inicial="formatoExportarInicial"
++														:capturar-preview="capturarPreviewExportacao"
++														@close="fecharModalExportar"
++														@confirmar="confirmarExportacao"></ModalExportarOrganograma>
+ </section>
+ 
+ <!-- Modal Histórico de estados -->
+diff --git a/src/1.apresentacao/views/organograma/listar/listar.test.js b/src/1.apresentacao/views/organograma/listar/listar.test.js
+index a039f593..ada7e052 100644
+--- a/src/1.apresentacao/views/organograma/listar/listar.test.js
++++ b/src/1.apresentacao/views/organograma/listar/listar.test.js
+@@ -21,12 +21,14 @@ import mensagem from '@/1.apresentacao/helpers/mensagem/mensagem'
+ import organogramaServico from '@/2.servicos/organograma/organogramaServico'
+ import alocacaoCargoServico from '@/2.servicos/alocacaocargo/alocacaoCargoServico'
+ import simulacaoServico from '@/2.servicos/simulacao/simulacaoServico'
++import projetoSimulacaoServico from '@/2.servicos/projetosimulacao/projetoSimulacaoServico'
+ import identidadeVisualServico from '@/2.servicos/identidadevisual/identidadeVisualServico'
+ 
+ vi.mock('@/1.apresentacao/helpers/mensagem/mensagem')
+ vi.mock('@/2.servicos/organograma/organogramaServico')
+ vi.mock('@/2.servicos/alocacaocargo/alocacaoCargoServico')
+ vi.mock('@/2.servicos/simulacao/simulacaoServico')
++vi.mock('@/2.servicos/projetosimulacao/projetoSimulacaoServico')
+ vi.mock('@/2.servicos/identidadevisual/identidadeVisualServico')
+ vi.mock('@/2.servicos/autenticacao/autenticarServico', () => ({
+   default: {
+@@ -40,9 +42,12 @@ vi.mock('@/2.servicos/autenticacao/autenticarServico', () => ({
+ vi.mock('jspdf', () => ({
+   jsPDF: vi.fn().mockImplementation(() => ({
+     addImage: vi.fn(),
++    addPage: vi.fn(),
+     save: vi.fn(),
+     setFontSize: vi.fn(),
+     setTextColor: vi.fn(),
++    setFillColor: vi.fn(),
++    rect: vi.fn(),
+     setFont: vi.fn(),
+     text: vi.fn(),
+     setDrawColor: vi.fn(),
+@@ -149,6 +154,7 @@ describe('listar-organograma', () => {
+     alocacaoCargoServico.pesquisarUnidadeFuncional = vi.fn()
+     simulacaoServico.buscarOrganogramaGrafico = vi.fn()
+     simulacaoServico.pesquisarPorChave = vi.fn()
++    projetoSimulacaoServico.pesquisarPorChave = vi.fn().mockResolvedValue({ sucesso: false })
+     identidadeVisualServico.obterLogosRelatorio = vi.fn().mockResolvedValue({ logoPrincipal: null, logoSecundaria: null })
+     identidadeVisualServico.pesquisarPorUnidadeFuncionalId = vi.fn().mockResolvedValue({ sucesso: false })
+   })
+@@ -1503,6 +1509,413 @@ describe('listar-organograma', () => {
+     })
+   })
+ 
++  describe('Modal de exportacao e paginacao por papel', () => {
++    const setupDomExportMocks = () => {
++      const mockCtx = {
++        drawImage: vi.fn(),
++        fillRect: vi.fn(),
++        set fillStyle(value) {
++          this._fillStyle = value
++        },
++      }
++
++      const mockCanvas = {
++        width: 0,
++        height: 0,
++        getContext: vi.fn(() => mockCtx),
++        toDataURL: vi.fn(() => 'data:image/png;base64,mock'),
++      }
++
++      const originalCreateElement = document.createElement.bind(document)
++      vi.spyOn(document, 'createElement').mockImplementation((tagName) => {
++        const lowerTag = String(tagName).toLowerCase()
++        if (lowerTag === 'canvas') return mockCanvas
++        if (lowerTag === 'a') {
++          const anchor = originalCreateElement('a')
++          anchor.click = vi.fn()
++          return anchor
++        }
++        return originalCreateElement(tagName)
++      })
++
++      return { mockCanvas }
++    }
++
++    const mockJsPdfPaginado = async () => {
++      const { jsPDF } = await import('jspdf')
++      const addImageMock = vi.fn()
++      const addPageMock = vi.fn()
++      const saveMock = vi.fn()
++      const textMock = vi.fn()
++      const rectMock = vi.fn()
++      const setFillColorMock = vi.fn()
++      vi.mocked(jsPDF).mockImplementation(() => ({
++        addImage: addImageMock,
++        addPage: addPageMock,
++        save: saveMock,
++        setFontSize: vi.fn(),
++        setTextColor: vi.fn(),
++        setFillColor: setFillColorMock,
++        rect: rectMock,
++        setFont: vi.fn(),
++        text: textMock,
++        setDrawColor: vi.fn(),
++        setLineWidth: vi.fn(),
++        line: vi.fn(),
++        getTextWidth: vi.fn().mockReturnValue(50),
++        internal: {
++          pageSize: {
++            getWidth: vi.fn().mockReturnValue(300),
++            getHeight: vi.fn().mockReturnValue(400),
++          },
++        },
++      }))
++      return { addImageMock, addPageMock, saveMock, textMock, rectMock, setFillColorMock }
++    }
++
++    afterEach(() => {
++      if (document.createElement.mockRestore) {
++        document.createElement.mockRestore()
++      }
++    })
++
++    it('abrirModalExportar deve abrir o modal com a dimensao do organograma e o formato solicitado', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 400, height: 250 })
++
++      wrapper.vm.abrirModalExportar('jpg')
++
++      expect(wrapper.vm.mostrarModalExportar).toBe(true)
++      expect(wrapper.vm.dimensaoOrganogramaExportacao).toEqual({ width: 400, height: 250 })
++      expect(wrapper.vm.formatoExportarInicial).toBe('jpg')
++    })
++
++    it('abrirModalExportar deve bloquear a exportacao quando a simulacao nao possui unidades', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.modoSimulacao = true
++      wrapper.vm.organogramas = []
++
++      wrapper.vm.abrirModalExportar('pdf')
++
++      expect(mensagem.alerta).toHaveBeenCalledWith('Esta simulação não possui unidades para exportar.')
++      expect(wrapper.vm.mostrarModalExportar).toBe(false)
++    })
++
++    it('fecharModalExportar deve fechar o modal', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.mostrarModalExportar = true
++
++      wrapper.vm.fecharModalExportar()
++
++      expect(wrapper.vm.mostrarModalExportar).toBe(false)
++    })
++
++    it('capturarPreviewExportacao deve delegar a captura para o componente de detalhes', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const spy = vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem')
++
++      await wrapper.vm.capturarPreviewExportacao(2)
++
++      expect(spy).toHaveBeenCalledWith(2)
++    })
++
++    it('capturarPreviewExportacao deve resolver null quando nao houver componente de detalhes', async () => {
++      wrapper = await createWrapper()
++
++      const resultado = await wrapper.vm.capturarPreviewExportacao(2)
++
++      expect(resultado).toBeNull()
++    })
++
++    it('confirmarExportacao deve chamar generatePdf e fechar o modal quando o formato for pdf', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.mostrarModalExportar = true
++      const generatePdfSpy = vi.spyOn(wrapper.vm, 'generatePdf').mockResolvedValue()
++
++      const parametros = { formato: 'pdf', papel: 'A4', orientacao: 'retrato', escala: 100, folhas: { cols: 1, rows: 1 } }
++      await wrapper.vm.confirmarExportacao(parametros)
++
++      expect(generatePdfSpy).toHaveBeenCalledWith(parametros)
++      expect(wrapper.vm.mostrarModalExportar).toBe(false)
++    })
++
++    it('confirmarExportacao deve chamar generateJpg quando o formato for jpg', async () => {
++      wrapper = await createWrapper()
++      const generateJpgSpy = vi.spyOn(wrapper.vm, 'generateJpg').mockResolvedValue()
++
++      const parametros = { formato: 'jpg', papel: 'A4', orientacao: 'retrato', escala: 80, folhas: { cols: 1, rows: 1 } }
++      await wrapper.vm.confirmarExportacao(parametros)
++
++      expect(generateJpgSpy).toHaveBeenCalledWith(parametros)
++    })
++
++    it('generatePdf com parametrosPapel de uma folha nao deve chamar addPage', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { addPageMock, saveMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 300,
++        height: 150,
++      })
++
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 100,
++        folhas: { cols: 1, rows: 1 },
++      })
++
++      expect(addPageMock).not.toHaveBeenCalled()
++      expect(saveMock).toHaveBeenCalledWith('organograma.pdf')
++      expect(mensagem.sucesso).toHaveBeenCalledWith('PDF exportado com sucesso.')
++    })
++
++    it('generatePdf com parametrosPapel de multiplas folhas deve paginar chamando addPage', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { addPageMock, saveMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 300,
++        height: 150,
++      })
++
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 100,
++        folhas: { cols: 2, rows: 1 },
++      })
++
++      // 2 folhas => 1 chamada de addPage (a primeira folha nao chama addPage)
++      expect(addPageMock).toHaveBeenCalledTimes(1)
++      expect(saveMock).toHaveBeenCalledWith('organograma.pdf')
++    })
++
++    it('generatePdf com parametrosPapel deve centralizar o conteudo horizontalmente na area util da folha, mantendo-o ancorado no topo', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { addImageMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 300,
++        height: 150,
++      })
++
++      // Escala de 50% deixa o conteudo bem menor que a area util da folha A4
++      // — se nao houver centralizacao horizontal, o addImage recebe x = margem (20).
++      // Verticalmente o conteudo deve ficar ancorado no topo (logo abaixo do
++      // cabecalho), sem centralizar — por isso y nao deve crescer com a escala.
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 50,
++        folhas: { cols: 1, rows: 1 },
++      })
++
++      const chamadaConteudo = addImageMock.mock.calls.find((chamada) => chamada[0] === 'data:image/png;base64,mock')
++      const [, , x, y] = chamadaConteudo
++      // headerHeight (100) + legendaHeight (0, sem legenda) + margin (20).
++      expect(x).toBeGreaterThan(100)
++      expect(y).toBe(120)
++    })
++
++    it('generatePdf com parametrosPapel nao deve mais escrever numero de folha (paginacao) sobre o cabecalho', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { textMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 300,
++        height: 150,
++      })
++
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 100,
++        folhas: { cols: 2, rows: 2 },
++      })
++
++      const chamouTextoFolha = textMock.mock.calls.some((chamada) => String(chamada[0]).includes('Folha'))
++      expect(chamouTextoFolha).toBe(false)
++    })
++
++    it('generatePdf com parametrosPapel de multiplas folhas mantem o offset vertical do conteudo igual em todas as folhas (ancorado no topo, sem centralizar)', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { addImageMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 600, height: 300, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 600,
++        height: 300,
++      })
++
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 100,
++        folhas: { cols: 2, rows: 2 },
++      })
++
++      const chamadasConteudo = addImageMock.mock.calls.filter((chamada) => chamada[0] === 'data:image/png;base64,mock')
++      const valoresY = chamadasConteudo.map((chamada) => chamada[3])
++      // Mesmo na ultima linha/coluna (fatia menor que as demais), o y deve
++      // permanecer o mesmo — sem centralizacao vertical do conteudo.
++      expect(new Set(valoresY).size).toBe(1)
++    })
++
++    it('generatePdf em modoSimulacao deve exibir a legenda de acoes mantendo o cabecalho institucional', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.modoSimulacao = true
++      wrapper.vm.nomeSimulacao = 'Simulação X'
++      wrapper.vm.projetoNome = 'Projeto Y'
++      wrapper.vm.situacaoSimulacao = 'Em processo'
++      wrapper.vm.organogramas = [{ id: 1, tipoAcaoSimulacao: 1 }]
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { textMock, rectMock, setFillColorMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 300,
++        height: 150,
++      })
++
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 100,
++        folhas: { cols: 1, rows: 1 },
++      })
++
++      // Cabeçalho institucional é o mesmo em simulação ou não — só a legenda
++      // de ações diferencia visualmente o PDF de uma simulação.
++      expect(textMock).toHaveBeenCalledWith('Prefeitura Municipal de Curitiba', expect.anything(), expect.anything(), expect.anything())
++      expect(textMock).not.toHaveBeenCalledWith('Organograma da Simulação', expect.anything(), expect.anything(), expect.anything())
++      expect(textMock.mock.calls.some((chamada) => chamada[0] === 'Simulação X')).toBe(false)
++      expect(rectMock).toHaveBeenCalled()
++      expect(setFillColorMock).toHaveBeenCalled()
++    })
++
++    it('generatePdf em modoSimulacao sem acrescimos/alteracoes nao deve desenhar a legenda de acoes', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.modoSimulacao = true
++      wrapper.vm.nomeSimulacao = 'Simulação X'
++      wrapper.vm.organogramas = [{ id: 1, tipoAcaoSimulacao: 0 }]
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++      const { rectMock } = await mockJsPdfPaginado()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 300, height: 150 })
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 300, height: 150, toDataURL: () => 'data:image/png;base64,mock' },
++        width: 300,
++        height: 150,
++      })
++
++      await wrapper.vm.generatePdf({
++        formato: 'pdf',
++        papel: 'A4',
++        orientacao: 'retrato',
++        escala: 100,
++        folhas: { cols: 1, rows: 1 },
++      })
++
++      expect(rectMock).not.toHaveBeenCalled()
++    })
++
++    it('mostrarLegendaExportacao deve refletir modoSimulacao e a existencia de acoes de acrescimo/alteracao', async () => {
++      wrapper = await createWrapper()
++
++      wrapper.vm.modoSimulacao = false
++      wrapper.vm.organogramas = [{ id: 1, tipoAcaoSimulacao: 1 }]
++      expect(wrapper.vm.mostrarLegendaExportacao).toBe(false)
++
++      wrapper.vm.modoSimulacao = true
++      wrapper.vm.organogramas = [{ id: 1, tipoAcaoSimulacao: 0 }]
++      expect(wrapper.vm.mostrarLegendaExportacao).toBe(false)
++
++      wrapper.vm.organogramas = [{ id: 1, tipoAcaoSimulacao: 2 }]
++      expect(wrapper.vm.mostrarLegendaExportacao).toBe(true)
++    })
++
++    it('generatePdf deve bloquear a exportacao quando a simulacao nao possui unidades', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.modoSimulacao = true
++      wrapper.vm.organogramas = []
++
++      await wrapper.vm.generatePdf({ formato: 'pdf', papel: 'A4', orientacao: 'retrato', escala: 100, folhas: { cols: 1, rows: 1 } })
++
++      expect(mensagem.alerta).toHaveBeenCalledWith('Esta simulação não possui unidades para exportar.')
++      expect(mensagem.sucesso).not.toHaveBeenCalled()
++    })
++
++    it('generateJpg deve bloquear a exportacao quando a simulacao nao possui unidades', async () => {
++      wrapper = await createWrapper()
++      wrapper.vm.modoSimulacao = true
++      wrapper.vm.organogramas = []
++
++      await wrapper.vm.generateJpg({ formato: 'jpg', papel: 'A4', orientacao: 'retrato', escala: 100, folhas: { cols: 1, rows: 1 } })
++
++      expect(mensagem.alerta).toHaveBeenCalledWith('Esta simulação não possui unidades para exportar.')
++      expect(mensagem.sucesso).not.toHaveBeenCalled()
++    })
++
++    it('generateJpg com parametrosPapel deve reduzir o pixelRatio de captura proporcionalmente a escala', async () => {
++      wrapper = await createWrapper()
++      setupDomExportMocks()
++      wrapper.vm.exibirOrganograma = true
++      await nextTick()
++
++      vi.spyOn(wrapper.vm.$refs.detalhes, 'obterDimensaoContainer').mockReturnValue({ width: 200, height: 100 })
++      const capturarSpy = vi.spyOn(wrapper.vm.$refs.detalhes, 'capturarComoImagem').mockResolvedValue({
++        canvas: { width: 200, height: 100, toDataURL: () => 'data:image/jpeg;base64,mock' },
++      })
++
++      await wrapper.vm.generateJpg({ formato: 'jpg', papel: 'A4', orientacao: 'retrato', escala: 50, folhas: { cols: 1, rows: 1 } })
++
++      expect(capturarSpy).toHaveBeenCalled()
++      const pixelRatioUsado = capturarSpy.mock.calls[0][0]
++      expect(pixelRatioUsado).toBeCloseTo(2.5)
++      expect(mensagem.sucesso).toHaveBeenCalledWith('Imagem JPG exportada com sucesso.')
++    })
++  })
++
+   describe('Metodo pesquisar — erro sincrono', () => {
+     it('deve exibir erro inesperado quando o servico lancar excecao sincrona', async () => {
+       wrapper = await createWrapper()
+diff --git a/src/1.apresentacao/views/organograma/listar/listar.vue b/src/1.apresentacao/views/organograma/listar/listar.vue
+index fbd6e599..bddb982e 100644
+--- a/src/1.apresentacao/views/organograma/listar/listar.vue
++++ b/src/1.apresentacao/views/organograma/listar/listar.vue
+@@ -9,13 +9,45 @@
+   import alocacaoCargoServico from '@/2.servicos/alocacaocargo/alocacaoCargoServico'
+   import organogramaServico from '@/2.servicos/organograma/organogramaServico'
+   import simulacaoServico from '@/2.servicos/simulacao/simulacaoServico'
++  import projetoSimulacaoServico from '@/2.servicos/projetosimulacao/projetoSimulacaoServico'
+   import autenticarServico from '@/2.servicos/autenticacao/autenticarServico'
+   import logosRelatorioMixin from '@/1.apresentacao/helpers/identidadevisual/logosRelatorioMixin'
+   import identidadeVisualServico from '../../../../2.servicos/identidadevisual/identidadeVisualServico'
+   import Detalhes from '../detalhes/detalhes.vue'
++  import ModalExportarOrganograma, {
++    PAPEL_TAMANHOS_MM,
++    MARGEM_MM,
++    RESERVA_CABECALHO_PX,
++    RESERVA_RODAPE_PX,
++    RESERVA_LEGENDA_PX,
++    RESERVA_MARGEM_PX,
++  } from './exportar/modalExportarOrganograma.vue'
+   import { jsPDF } from 'jspdf'
+   import { formatarDataBRHoraComAs } from '@/1.apresentacao/helpers/datas/index'
+ 
++  // 1 px CSS a 96dpi convertido para milímetros físicos — mesma referência do
++  // modal de exportação, usada para converter o papel escolhido (mm) em px
++  // lógicos consumidos pelo jsPDF (unit: 'px').
++  const MM_PER_PX = 25.4 / 96
++  function mmParaPx(mm) {
++    return mm / MM_PER_PX
++  }
++
++  // Cores/labels da legenda de tipos de ação da simulação — reaproveitados de
++  // simular.html (mesmo significado: unidades/cargos mantidos, acrescidos e
++  // alterados; extintos não aparecem no organograma-grafo).
++  const LEGENDA_TIPO_ACAO = [
++    { tipo: 0, cor: '#3b82f6', rotulo: 'Atual' },
++    { tipo: 1, cor: '#22c55e', rotulo: 'Acréscimo' },
++    { tipo: 2, cor: '#eab308', rotulo: 'Alteração' },
++  ]
++
++  const SITUACAO_SIMULACAO_LABELS = {
++    0: 'Em processo',
++    1: 'Aprovada',
++    2: 'Reprovada',
++  }
++
+   export default {
+     name: 'listar-organograma',
+     mixins: [logosRelatorioMixin],
+@@ -24,6 +56,7 @@
+       Grid,
+       SelectAsyncComponent,
+       Detalhes,
++      ModalExportarOrganograma,
+     },
+     data() {
+       return {
+@@ -58,8 +91,13 @@
+         exportandoOrganograma: false,
+         modoSimulacao: false,
+         nomeSimulacao: null,
++        projetoNome: null,
++        situacaoSimulacao: null,
+         semDados: false,
+         login: '',
++        mostrarModalExportar: false,
++        dimensaoOrganogramaExportacao: { width: 0, height: 0 },
++        formatoExportarInicial: 'pdf',
+       }
+     },
+     computed: {
+@@ -71,6 +109,12 @@
+           (item) => item.unidadeFuncionalId === this.filtro.unidadeFuncionalPaiId,
+         )
+       },
++      // Reaproveitado pelo modal de exportação para reservar o mesmo espaço
++      // de legenda que a geração real do PDF usa (evita que a pré-
++      // visualização calcule uma paginação diferente da exportada).
++      mostrarLegendaExportacao() {
++        return this.modoSimulacao && this.possuiAcoesSimulacaoParaLegenda()
++      },
+     },
+     async created() {
+       this.login = autenticarServico.login()
+@@ -370,8 +414,13 @@
+           img.src = dataUrl
+         })
+       },
+-      async generateJpg() {
++      async generateJpg(parametrosPapel) {
+         try {
++          if (this.modoSimulacao && this.organogramas.length === 0) {
++            mensagem.alerta('Esta simulação não possui unidades para exportar.')
++            return
++          }
++
+           this.exportandoOrganograma = true
+ 
+           const detalhesComponent = this.$refs.detalhes
+@@ -388,9 +437,14 @@
+           // Captura o organograma já na resolução final: pixelRatio alto faz o
+           // DOM (texto, linhas) ser rasterizado nítido na origem, em vez de um
+           // bitmap pequeno esticado depois por interpolação. O JPG é um
+-          // arquivo único, então a escala fica limitada ao teto de canvas dos
+-          // navegadores (32767px).
+-          const pixelRatio = this.calculateOptimalScale(width, height, 5)
++          // arquivo único (sem paginação): a "escala" escolhida no modal de
++          // exportação apenas reduz proporcionalmente a densidade de captura
++          // (ex.: 70% gera uma imagem menos densa que 100%). A escala fica
++          // limitada ao teto de canvas dos navegadores (32767px).
++          const pixelRatioBase = this.calculateOptimalScale(width, height, 5)
++          const pixelRatio = parametrosPapel
++            ? Math.max(1, pixelRatioBase * (parametrosPapel.escala / 100))
++            : pixelRatioBase
+           const { canvas } = await detalhesComponent.capturarComoImagem(pixelRatio)
+ 
+           const jpgDataUrl = canvas.toDataURL('image/jpeg', 0.95)
+@@ -408,115 +462,114 @@
+           this.exportandoOrganograma = false
+         }
+       },
+-      async generatePdf() {
+-        try {
+-          this.exportandoOrganograma = true
+-
+-          const detalhesComponent = this.$refs.detalhes
+-          if (!detalhesComponent) {
+-            throw new Error('Componente de detalhes não encontrado')
++      // Busca/dimensiona as logos uma única vez (reaproveitadas em todas as
++      // folhas, quando a exportação for paginada por papel).
++      async prepararLogosCabecalho() {
++        const logoMaxWidth = 150
++        const logoMaxHeight = 56
++        const logos = { imap: null, pmc: null }
++
++        const logoImap = await this.buscarLogoIdentidadeUnidadeFuncional(this.filtro.unidadeFuncionalPaiId)
++        if (logoImap) {
++          const dimensaoNatural = await this.obterDimensaoImagem(logoImap)
++          logos.imap = {
++            dataUrl: logoImap,
++            formato: this.obterFormatoImagem(logoImap),
++            dimensao: this.calcularDimensaoLogo(dimensaoNatural.width, dimensaoNatural.height, logoMaxWidth, logoMaxHeight),
+           }
++        }
+ 
+-          const dimensaoContainer = detalhesComponent.obterDimensaoContainer()
+-          const { width, height } = dimensaoContainer || {}
+-          if (!width || !height || width <= 0 || height <= 0) {
+-            throw new Error(`Dimensões inválidas do organograma: ${width}x${height}`)
++        if (this.logoPmc) {
++          const dimensaoNatural = await this.obterDimensaoImagem(this.logoPmc)
++          logos.pmc = {
++            dataUrl: this.logoPmc,
++            formato: this.obterFormatoImagem(this.logoPmc),
++            dimensao: this.calcularDimensaoLogo(dimensaoNatural.width, dimensaoNatural.height, logoMaxWidth, logoMaxHeight),
+           }
++        }
+ 
+-          // Mesma ideia do JPG: captura já na resolução final (nítida), em vez
+-          // de fazer upscale do bitmap depois. Cada tile do PDF é recortado
+-          // 1:1 desse canvas, então o pixelRatio de captura é quem determina
+-          // a nitidez do documento final.
+-          const pixelRatio = this.calculateOptimalScale(width, height, 4)
+-          const { canvas } = await detalhesComponent.capturarComoImagem(pixelRatio)
++        return logos
++      },
++      // Cabeçalho institucional — mesmo texto para organograma vigente e
++      // para simulação (a identificação do cenário simulado é feita pela
++      // legenda de ações, não pelo título do cabeçalho).
++      desenharCabecalhoPdf(pdf, pageWidth, margin, logos) {
++        if (logos.imap) {
++          const { dataUrl, formato, dimensao } = logos.imap
++          const logoY = margin + 10 + (56 - dimensao.height) / 2
++          pdf.addImage(dataUrl, formato, margin, logoY, dimensao.width, dimensao.height)
++        }
+ 
+-          // Configurações do cabeçalho e rodapé
+-          const headerHeight = 100
+-          const footerHeight = 40
+-          const margin = 20
+-
+-          const orientation = width > height ? 'landscape' : 'portrait'
+-          const pdf = new jsPDF({
+-            orientation,
+-            unit: 'px',
+-            format: [width, height + headerHeight + footerHeight + margin * 3],
+-          })
+-
+-          const pageWidth = pdf.internal.pageSize.getWidth()
+-
+-          // Logo da Unidade Funcional selecionada (esquerda, IMAP) e logo
+-          // Principal/Prefeitura (direita, via logosRelatorioMixin — mesma usada
+-          // nos demais relatórios). A logo da Unidade é específica do órgão
+-          // pesquisado; quando não houver cadastro, o cabeçalho fica sem ela.
+-          const logoMaxWidth = 150
+-          const logoMaxHeight = 56
+-
+-          const logoImap = await this.buscarLogoIdentidadeUnidadeFuncional(this.filtro.unidadeFuncionalPaiId)
+-          if (logoImap) {
+-            const dimensaoNatural = await this.obterDimensaoImagem(logoImap)
+-            const dimensao = this.calcularDimensaoLogo(dimensaoNatural.width, dimensaoNatural.height, logoMaxWidth, logoMaxHeight)
+-            const logoY = margin + 10 + (logoMaxHeight - dimensao.height) / 2
+-            pdf.addImage(logoImap, this.obterFormatoImagem(logoImap), margin, logoY, dimensao.width, dimensao.height)
+-          }
++        if (logos.pmc) {
++          const { dataUrl, formato, dimensao } = logos.pmc
++          const logoY = margin + 5 + (56 - dimensao.height) / 2
++          pdf.addImage(dataUrl, formato, pageWidth - margin - dimensao.width, logoY, dimensao.width, dimensao.height)
++        }
+ 
+-          if (this.logoPmc) {
+-            const dimensaoNatural = await this.obterDimensaoImagem(this.logoPmc)
+-            const dimensao = this.calcularDimensaoLogo(dimensaoNatural.width, dimensaoNatural.height, logoMaxWidth, logoMaxHeight)
+-            const logoY = margin + 5 + (logoMaxHeight - dimensao.height) / 2
+-            pdf.addImage(this.logoPmc, this.obterFormatoImagem(this.logoPmc), pageWidth - margin - dimensao.width, logoY, dimensao.width, dimensao.height)
+-          }
++        const centerX = pageWidth / 2
++        pdf.setFontSize(14)
++        pdf.setTextColor(0, 0, 0)
++        pdf.setFont('helvetica', 'bold')
++        pdf.text('Prefeitura Municipal de Curitiba', centerX, margin + 28, { align: 'center' })
++
++        pdf.setFontSize(11)
++        pdf.setFont('helvetica', 'normal')
++        pdf.setTextColor(95, 107, 118)
++        pdf.text('SEAC - Sistema de Estruturas Administrativas de Curitiba', centerX, margin + 45, { align: 'center' })
++
++        pdf.setFontSize(12)
++        pdf.setTextColor(0, 0, 0)
++        pdf.setFont('helvetica', 'bold')
++        pdf.text('Organograma', centerX, margin + 62, { align: 'center' })
++
++        pdf.setDrawColor(207, 214, 222)
++        pdf.setLineWidth(1)
++        pdf.line(margin, margin + 75, pageWidth - margin, margin + 75)
++      },
++      hexParaRgb(hex) {
++        const valor = parseInt(hex.replace('#', ''), 16)
++        return [(valor >> 16) & 255, (valor >> 8) & 255, valor & 255]
++      },
++      // Legenda dos tipos de ação do cenário simulado (RN.4.5.7): só aparece
++      // quando o organograma exportado possui unidades/cargos acrescidos ou
++      // alterados. Extinções não chegam ao organograma-grafo (são removidas
++      // da árvore), por isso não entram nesta legenda.
++      renderizarLegendaPdf(pdf, margin, y) {
++        let x = margin
++        pdf.setFontSize(9)
++        LEGENDA_TIPO_ACAO.filter((item) => this.organogramas.some((no) => no.tipoAcaoSimulacao === item.tipo)).forEach((item) => {
++          const [r, g, b] = this.hexParaRgb(item.cor)
++          pdf.setFillColor(r, g, b)
++          pdf.rect(x, y - 7, 8, 8, 'F')
++          pdf.setTextColor(60, 60, 60)
++          pdf.setFont('helvetica', 'normal')
++          pdf.text(item.rotulo, x + 12, y)
++          x += 12 + pdf.getTextWidth(item.rotulo) + 18
++        })
++      },
++      possuiAcoesSimulacaoParaLegenda() {
++        return this.organogramas.some((item) => item.tipoAcaoSimulacao === 1 || item.tipoAcaoSimulacao === 2)
++      },
++      // Rodapé - Informações de geração (posição fixa no final da folha).
++      renderizarRodapePdf(pdf, pageWidth, pageHeight, margin) {
++        const footerY = pageHeight - 15
+ 
+-          // Texto central do cabeçalho
+-          const centerX = pageWidth / 2
+-          pdf.setFontSize(14)
+-          pdf.setTextColor(0, 0, 0)
+-          pdf.setFont('helvetica', 'bold')
+-          pdf.text('Prefeitura Municipal de Curitiba', centerX, margin + 28, { align: 'center' })
++        pdf.setDrawColor(207, 214, 222)
++        pdf.setLineWidth(1)
++        pdf.line(margin, footerY - 25, pageWidth - margin, footerY - 25)
+ 
+-          pdf.setFontSize(11)
+-          pdf.setFont('helvetica', 'normal')
+-          pdf.setTextColor(95, 107, 118)
+-          pdf.text('SEAC - Sistema de Estruturas Administrativas de Curitiba', centerX, margin + 45, { align: 'center' })
++        pdf.setFontSize(9)
++        pdf.setTextColor(100, 100, 100)
+ 
+-          pdf.setFontSize(12)
+-          pdf.setTextColor(0, 0, 0)
++        if (this.modoSimulacao) {
+           pdf.setFont('helvetica', 'bold')
+-          pdf.text('Organograma', centerX, margin + 62, { align: 'center' })
+-
+-          pdf.setDrawColor(207, 214, 222)
+-          pdf.setLineWidth(1)
+-          pdf.line(margin, margin + 75, pageWidth - margin, margin + 75)
+-
+-          // Adiciona o organograma em blocos (tiles) abaixo do cabeçalho, recortados
+-          // 1:1 do canvas já capturado em alta resolução (sem reamostragem) — mantém
+-          // o texto nítido mesmo em organogramas extensos, sem esbarrar no limite de
+-          // canvas do navegador. PNG (sem perdas) evita a blocagem que o JPEG causa
+-          // em bordas de texto/linhas retas. x/y/w/h saem em pixels do canvas
+-          // capturado; dividir por pixelRatio converte de volta para os px lógicos
+-          // usados pelo PDF.
+-          await this.renderizarTiles(canvas, canvas.width, canvas.height, 1, 4000, (tile, x, y, w, h) => {
+-            const tileDataUrl = tile.toDataURL('image/png')
+-            pdf.addImage(
+-              tileDataUrl,
+-              'PNG',
+-              x / pixelRatio,
+-              headerHeight + margin + y / pixelRatio,
+-              w / pixelRatio,
+-              h / pixelRatio
+-            )
+-          })
+-
+-          // Rodapé - Informações de geração (posição fixa no final)
+-          const pageHeight = pdf.internal.pageSize.getHeight()
+-          const footerY = pageHeight - 15
+-
+-          pdf.setDrawColor(207, 214, 222)
+-          pdf.setLineWidth(1)
+-          pdf.line(margin, footerY - 25, pageWidth - margin, footerY - 25)
+-
+-          pdf.setFontSize(9)
+-          pdf.setTextColor(100, 100, 100)
++          pdf.text('Simulação', margin, footerY - 10)
+ 
++          pdf.setFont('helvetica', 'normal')
++          const projetoTexto = this.projetoNome ? ` · Projeto: ${this.projetoNome}` : ''
++          const situacaoTexto = this.situacaoSimulacao ? ` · Situação: ${this.situacaoSimulacao}` : ''
++          pdf.text(`${this.nomeSimulacao || '-'}${projetoTexto}${situacaoTexto}`, margin, footerY)
++        } else {
+           const atoOficialValido = this.metadado.atoOficialResponsavelVigente && this.metadado.atoOficialResponsavelVigente.trim() !== ''
+           const ultimoAtoValido = this.metadado.ultimoAtoOficialDeAlteracao && this.metadado.ultimoAtoOficialDeAlteracao.trim() !== ''
+           if (atoOficialValido && ultimoAtoValido) {
+@@ -532,52 +585,218 @@
+             pdf.setFont('helvetica', 'normal')
+             pdf.text(this.metadado.atoOficialResponsavelVigente, margin, footerY)
+           }
++        }
+ 
+-          const loginUsuario = this.login || 'Sistema'
+-          pdf.setFont('helvetica', 'normal')
+-          const geradoPorText = 'Gerado por: '
+-          const geradoPorWidth = pdf.getTextWidth(geradoPorText)
++        const loginUsuario = this.login || 'Sistema'
++        pdf.setFont('helvetica', 'normal')
++        const geradoPorText = 'Gerado por: '
++        const geradoPorWidth = pdf.getTextWidth(geradoPorText)
+ 
+-          pdf.setFont('helvetica', 'bold')
+-          const loginUsuarioWidth = pdf.getTextWidth(loginUsuario)
++        pdf.setFont('helvetica', 'bold')
++        const loginUsuarioWidth = pdf.getTextWidth(loginUsuario)
+ 
+-          const geradoPorTotalWidth = geradoPorWidth + loginUsuarioWidth
+-          const geradoPorX = (pageWidth - geradoPorTotalWidth) / 2
++        const geradoPorTotalWidth = geradoPorWidth + loginUsuarioWidth
++        const geradoPorX = (pageWidth - geradoPorTotalWidth) / 2
+ 
+-          pdf.setFont('helvetica', 'normal')
+-          pdf.text(geradoPorText, geradoPorX, footerY)
++        pdf.setFont('helvetica', 'normal')
++        pdf.text(geradoPorText, geradoPorX, footerY)
+ 
+-          pdf.setFont('helvetica', 'bold')
+-          pdf.text(loginUsuario, geradoPorX + geradoPorWidth, footerY)
+-
+-          const agora = new Date()
+-          const dataFormatada = agora.toLocaleDateString('pt-BR', {
+-            day: '2-digit',
+-            month: '2-digit',
+-            year: 'numeric',
+-          })
+-          const horaFormatada = agora.toLocaleTimeString('pt-BR', {
+-            hour: '2-digit',
+-            minute: '2-digit',
+-            second: '2-digit',
+-          })
+-          const dataHoraAtual = `${dataFormatada} às ${horaFormatada}`
++        pdf.setFont('helvetica', 'bold')
++        pdf.text(loginUsuario, geradoPorX + geradoPorWidth, footerY)
+ 
+-          pdf.setFont('helvetica', 'normal')
+-          const dataHoraLabel = 'Data/Hora: '
+-          const dataHoraLabelWidth = pdf.getTextWidth(dataHoraLabel)
++        const agora = new Date()
++        const dataFormatada = agora.toLocaleDateString('pt-BR', {
++          day: '2-digit',
++          month: '2-digit',
++          year: 'numeric',
++        })
++        const horaFormatada = agora.toLocaleTimeString('pt-BR', {
++          hour: '2-digit',
++          minute: '2-digit',
++          second: '2-digit',
++        })
++        const dataHoraAtual = `${dataFormatada} às ${horaFormatada}`
+ 
+-          pdf.setFont('helvetica', 'bold')
+-          const dataHoraWidth = pdf.getTextWidth(dataHoraAtual)
+-          const totalWidth = dataHoraLabelWidth + dataHoraWidth
++        pdf.setFont('helvetica', 'normal')
++        const dataHoraLabel = 'Data/Hora: '
++        const dataHoraLabelWidth = pdf.getTextWidth(dataHoraLabel)
+ 
+-          pdf.setFont('helvetica', 'normal')
+-          pdf.text(dataHoraLabel, pageWidth - margin - totalWidth, footerY)
++        pdf.setFont('helvetica', 'bold')
++        const dataHoraWidth = pdf.getTextWidth(dataHoraAtual)
++        const totalWidth = dataHoraLabelWidth + dataHoraWidth
+ 
+-          pdf.setFont('helvetica', 'bold')
+-          pdf.text(dataHoraAtual, pageWidth - margin - dataHoraWidth, footerY)
++        pdf.setFont('helvetica', 'normal')
++        pdf.text(dataHoraLabel, pageWidth - margin - totalWidth, footerY)
++
++        pdf.setFont('helvetica', 'bold')
++        pdf.text(dataHoraAtual, pageWidth - margin - dataHoraWidth, footerY)
++      },
++      // Fluxo legado: uma única página dimensionada ao conteúdo (comportamento
++      // preservado 1:1 quando generatePdf é chamado sem parâmetros de papel).
++      async gerarPdfConteudoAjustado(width, height, detalhesComponent) {
++        // Mesma ideia do JPG: captura já na resolução final (nítida), em vez
++        // de fazer upscale do bitmap depois. Cada tile do PDF é recortado
++        // 1:1 desse canvas, então o pixelRatio de captura é quem determina
++        // a nitidez do documento final.
++        const pixelRatio = this.calculateOptimalScale(width, height, 4)
++        const { canvas } = await detalhesComponent.capturarComoImagem(pixelRatio)
++
++        const headerHeight = 100
++        const footerHeight = 40
++        const margin = 20
++        const mostrarLegenda = this.modoSimulacao && this.possuiAcoesSimulacaoParaLegenda()
++        const legendaHeight = mostrarLegenda ? 24 : 0
++
++        const orientation = width > height ? 'landscape' : 'portrait'
++        const pdf = new jsPDF({
++          orientation,
++          unit: 'px',
++          format: [width, height + headerHeight + legendaHeight + footerHeight + margin * 3],
++        })
++
++        const pageWidth = pdf.internal.pageSize.getWidth()
++        const logos = await this.prepararLogosCabecalho()
++        this.desenharCabecalhoPdf(pdf, pageWidth, margin, logos)
++        if (mostrarLegenda) {
++          this.renderizarLegendaPdf(pdf, margin, margin + 75 + 16)
++        }
++
++        // Adiciona o organograma em blocos (tiles) abaixo do cabeçalho, recortados
++        // 1:1 do canvas já capturado em alta resolução (sem reamostragem) — mantém
++        // o texto nítido mesmo em organogramas extensos, sem esbarrar no limite de
++        // canvas do navegador. PNG (sem perdas) evita a blocagem que o JPEG causa
++        // em bordas de texto/linhas retas. x/y/w/h saem em pixels do canvas
++        // capturado; dividir por pixelRatio converte de volta para os px lógicos
++        // usados pelo PDF.
++        await this.renderizarTiles(canvas, canvas.width, canvas.height, 1, 4000, (tile, x, y, w, h) => {
++          const tileDataUrl = tile.toDataURL('image/png')
++          pdf.addImage(
++            tileDataUrl,
++            'PNG',
++            x / pixelRatio,
++            headerHeight + legendaHeight + margin + y / pixelRatio,
++            w / pixelRatio,
++            h / pixelRatio
++          )
++        })
+ 
+-          pdf.save('organograma.pdf')
++        const pageHeight = pdf.internal.pageSize.getHeight()
++        this.renderizarRodapePdf(pdf, pageWidth, pageHeight, margin)
++
++        pdf.save('organograma.pdf')
++      },
++      // Fluxo novo: pagina o organograma em folhas físicas (A4/A3/A2, retrato
++      // ou paisagem), respeitando a escala e a grade (cols x rows) calculadas
++      // pelo modal de exportação a partir do modo de ajuste escolhido.
++      async gerarPdfPaginadoPorPapel(parametrosPapel, width, height, detalhesComponent) {
++        const { papel, orientacao, escala, folhas } = parametrosPapel
++        const papelBase = PAPEL_TAMANHOS_MM[papel] || PAPEL_TAMANHOS_MM.A4
++        const papelMm =
++          orientacao === 'paisagem'
++            ? { width: papelBase.height, height: papelBase.width }
++            : { width: papelBase.width, height: papelBase.height }
++
++        // Reserva idêntica à usada pelo modal para calcular folhas/escala —
++        // veja modalExportarOrganograma.vue (áreaConteudoMm).
++        const headerHeight = RESERVA_CABECALHO_PX
++        const footerHeight = RESERVA_RODAPE_PX
++        const margin = RESERVA_MARGEM_PX
++        const mostrarLegenda = this.modoSimulacao && this.possuiAcoesSimulacaoParaLegenda()
++        const legendaHeight = mostrarLegenda ? RESERVA_LEGENDA_PX : 0
++
++        const pageWidthPx = mmParaPx(papelMm.width)
++        const pageHeightPx = mmParaPx(papelMm.height)
++        const areaConteudoLarguraPx = pageWidthPx - mmParaPx(MARGEM_MM) * 2
++        const areaConteudoAlturaPx = pageHeightPx - headerHeight - legendaHeight - footerHeight - margin * 2
++        const orientationJsPdf = orientacao === 'paisagem' ? 'landscape' : 'portrait'
++
++        const pdf = new jsPDF({ orientation: orientationJsPdf, unit: 'px', format: [pageWidthPx, pageHeightPx] })
++
++        // Escala física escolhida no modal: cada px lógico do organograma
++        // ocupa (escala/100) do seu tamanho natural na folha impressa.
++        const fatorEscala = Math.max(escala, 1) / 100
++        const { cols, rows } = folhas
++
++        // Captura o organograma inteiro uma única vez, na resolução final:
++        // cada folha recorta 1:1 a sua fatia deste canvas (sem reamostragem).
++        const pixelRatio = this.calculateOptimalScale(width, height, 4)
++        const { canvas } = await detalhesComponent.capturarComoImagem(pixelRatio)
++        const logos = await this.prepararLogosCabecalho()
++
++        const larguraFatiaOrigemPx = (areaConteudoLarguraPx / fatorEscala) * pixelRatio
++        const alturaFatiaOrigemPx = (areaConteudoAlturaPx / fatorEscala) * pixelRatio
++
++        for (let linha = 0; linha < rows; linha += 1) {
++          for (let coluna = 0; coluna < cols; coluna += 1) {
++            if (linha > 0 || coluna > 0) {
++              pdf.addPage([pageWidthPx, pageHeightPx], orientationJsPdf)
++            }
++
++            const pageWidth = pdf.internal.pageSize.getWidth()
++            this.desenharCabecalhoPdf(pdf, pageWidth, margin, logos)
++            if (mostrarLegenda) {
++              this.renderizarLegendaPdf(pdf, margin, margin + 75 + 16)
++            }
++
++            const sx = coluna * larguraFatiaOrigemPx
++            const sy = linha * alturaFatiaOrigemPx
++            const sw = Math.min(larguraFatiaOrigemPx, canvas.width - sx)
++            const sh = Math.min(alturaFatiaOrigemPx, canvas.height - sy)
++
++            if (sw > 0 && sh > 0) {
++              const destWidthPx = (sw / pixelRatio) * fatorEscala
++              const destHeightPx = (sh / pixelRatio) * fatorEscala
++
++              const tileCanvas = document.createElement('canvas')
++              tileCanvas.width = Math.max(1, Math.round(sw))
++              tileCanvas.height = Math.max(1, Math.round(sh))
++              const ctx = tileCanvas.getContext('2d')
++              ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, tileCanvas.width, tileCanvas.height)
++
++              // Centraliza horizontalmente o conteúdo dentro da área útil da
++              // folha — só faz diferença na última coluna, cuja fatia sobra
++              // menor que as demais (as folhas cheias já preenchem toda a
++              // largura). Verticalmente o conteúdo fica ancorado no topo
++              // (logo abaixo do cabeçalho/legenda), sem centralizar — a
++              // imagem deve começar sempre no topo da folha, não flutuar.
++              const offsetX = margin + Math.max(0, (areaConteudoLarguraPx - destWidthPx) / 2)
++              const offsetY = headerHeight + legendaHeight + margin
++
++              pdf.addImage(tileCanvas.toDataURL('image/png'), 'PNG', offsetX, offsetY, destWidthPx, destHeightPx)
++            }
++
++            const pageHeight = pdf.internal.pageSize.getHeight()
++            this.renderizarRodapePdf(pdf, pageWidth, pageHeight, margin)
++          }
++        }
++
++        pdf.save('organograma.pdf')
++      },
++      async generatePdf(parametrosPapel) {
++        try {
++          if (this.modoSimulacao && this.organogramas.length === 0) {
++            mensagem.alerta('Esta simulação não possui unidades para exportar.')
++            return
++          }
++
++          this.exportandoOrganograma = true
++
++          const detalhesComponent = this.$refs.detalhes
++          if (!detalhesComponent) {
++            throw new Error('Componente de detalhes não encontrado')
++          }
++
++          const dimensaoContainer = detalhesComponent.obterDimensaoContainer()
++          const { width, height } = dimensaoContainer || {}
++          if (!width || !height || width <= 0 || height <= 0) {
++            throw new Error(`Dimensões inválidas do organograma: ${width}x${height}`)
++          }
++
++          if (parametrosPapel) {
++            await this.gerarPdfPaginadoPorPapel(parametrosPapel, width, height, detalhesComponent)
++          } else {
++            await this.gerarPdfConteudoAjustado(width, height, detalhesComponent)
++          }
+ 
+           mensagem.sucesso('PDF exportado com sucesso.')
+         } catch (error) {
+@@ -654,6 +873,8 @@
+ 
+           if (respostaSimulacao.sucesso) {
+             this.nomeSimulacao = respostaSimulacao.dados.nome
++            this.situacaoSimulacao = SITUACAO_SIMULACAO_LABELS[respostaSimulacao.dados.status] ?? null
++            await this.carregarNomeProjetoSimulacao(respostaSimulacao.dados.projetoSimulacaoChave)
+           }
+ 
+           if (respostaOrg.sucesso && respostaOrg.dados?.length > 0) {
+@@ -668,6 +889,53 @@
+           this.carregando = false
+         }
+       },
++      // Nome do projeto de simulação, usado no cabeçalho/rodapé do PDF exportado
++      // no lugar da legislação de estrutura (RN.4.5.7). Falha na busca não
++      // impede a exportação: o cabeçalho simplesmente omite o projeto.
++      async carregarNomeProjetoSimulacao(projetoSimulacaoChave) {
++        if (!projetoSimulacaoChave) return
++        try {
++          const respostaProjeto = await projetoSimulacaoServico.pesquisarPorChave(projetoSimulacaoChave)
++          if (respostaProjeto.sucesso) {
++            this.projetoNome = respostaProjeto.dados.nome
++          }
++        } catch {
++          this.projetoNome = null
++        }
++      },
++      // Abre o modal de parâmetros de exportação (papel/orientação/modo de
++      // ajuste). Bloqueia a exportação sem gerar arquivo quando o cenário
++      // simulado não possui unidades (Cenário 3 da atividade).
++      abrirModalExportar(formato = 'pdf') {
++        if (this.modoSimulacao && this.organogramas.length === 0) {
++          mensagem.alerta('Esta simulação não possui unidades para exportar.')
++          return
++        }
++
++        const detalhesComponent = this.$refs.detalhes
++        this.dimensaoOrganogramaExportacao = detalhesComponent?.obterDimensaoContainer() || { width: 0, height: 0 }
++        this.formatoExportarInicial = formato
++        this.mostrarModalExportar = true
++      },
++      fecharModalExportar() {
++        this.mostrarModalExportar = false
++      },
++      // Repassado ao modal como `capturarPreview`: delega a captura ao mesmo
++      // método usado pela geração real (Detalhes.capturarComoImagem), para que
++      // a pré-visualização reflita fielmente o que será exportado.
++      capturarPreviewExportacao(pixelRatio) {
++        const detalhesComponent = this.$refs.detalhes
++        if (!detalhesComponent) return Promise.resolve(null)
++        return detalhesComponent.capturarComoImagem(pixelRatio)
++      },
++      async confirmarExportacao(parametrosPapel) {
++        this.mostrarModalExportar = false
++        if (parametrosPapel.formato === 'jpg') {
++          await this.generateJpg(parametrosPapel)
++        } else {
++          await this.generatePdf(parametrosPapel)
++        }
++      },
+ 
+       async buscarUnidadeFuncionalPai({ search, page, pageSize, ids }) {
+         try {

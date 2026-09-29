@@ -1,0 +1,241 @@
+diff --git a/src/1.apresentacao/views/organograma/detalhes/detalhes.vue b/src/1.apresentacao/views/organograma/detalhes/detalhes.vue
+index e4d41d92..4d878800 100644
+--- a/src/1.apresentacao/views/organograma/detalhes/detalhes.vue
++++ b/src/1.apresentacao/views/organograma/detalhes/detalhes.vue
+@@ -39,6 +39,11 @@ const INITIAL_VISIBLE_LEVELS = 2
+ // salvo para a unidade pesquisada (ver resetarLayout/listar.vue).
+ const COR_FUNDO_PADRAO = '#ffffff'
+ 
++// Margem (em px, espaço do fluxo) ao redor do conteúdo real do organograma
++// ao medir/capturar para exportação — evita cortar bordas/sombras dos nós
++// nas extremidades da árvore.
++const CAPTURA_PADDING_PX = 40
++
+ // Quebra o texto em múltiplas linhas, cortando sempre no espaço anterior
+ // ao limite de caracteres por linha (sem truncar o texto original).
+ function quebrarTexto(texto, limite) {
+@@ -183,9 +188,16 @@ export default {
+       setCenter,
+       findNode,
+       getNodes,
++      // Lista bruta de nós do fluxo (sem o filtro de "só renderizar
++      // visíveis"), usada na captura de exportação para medir/renderizar a
++      // árvore inteira independente do que está no viewport atual em tela.
++      // Renomeada (nosDoFluxo) para não colidir com a prop `nodes` do
++      // componente (itens de domínio recebidos de fora).
++      nodes: nosDoFluxo,
+       applyNodeChanges,
+       getViewport,
+       setViewport,
++      onlyRenderVisibleElements,
+     } = useVueFlow('org-chart-flow')
+     return {
+       updateNodeInternals,
+@@ -193,9 +205,11 @@ export default {
+       setCenter,
+       findNode,
+       getNodes,
++      nosDoFluxo,
+       applyNodeChanges,
+       getViewport,
+       setViewport,
++      onlyRenderVisibleElements,
+     }
+   },
+   data() {
+@@ -258,20 +272,66 @@ export default {
+     })
+   },
+   methods: {
+-    // Dimensões do container (em px lógicos/CSS), sem disparar nenhuma
+-    // captura — usado pela exportação para calcular o pixelRatio ideal
+-    // antes de rasterizar.
++    // Caixa delimitadora (bounding box) do conteúdo real do organograma, em
++    // espaço do fluxo (posição/tamanho dos nós — independente do zoom/pan
++    // atual e do tamanho da janela do navegador). Usada como medida estável
++    // do "tamanho do organograma" para a exportação, ao invés do tamanho em
++    // tela do container (que muda conforme a largura da janela, já que o
++    // fitView sempre reajusta o zoom para caber no container disponível).
++    // Usa a lista BRUTA de nós (this.nosDoFluxo), não this.getNodes: quando
++    // only-render-visible-elements está ativo (padrão, para performance na
++    // tela), getNodes só devolve os nós dentro da caixa atualmente visível
++    // no container — que encolhe com a janela do navegador. Medir por essa
++    // lista filtrada fazia a caixa (e, por consequência, a pré-visualização
++    // e a paginação do PDF) mudar conforme o tamanho da janela.
++    obterCaixaDelimitadora() {
++      const nos = this.nosDoFluxo
++      if (!nos || nos.length === 0) return null
++
++      let minX = Infinity
++      let minY = Infinity
++      let maxX = -Infinity
++      let maxY = -Infinity
++
++      nos.forEach((no) => {
++        const largura = no.dimensions?.width || NODE_WIDTH
++        const altura = no.dimensions?.height || NODE_HEIGHT
++        minX = Math.min(minX, no.position.x)
++        minY = Math.min(minY, no.position.y)
++        maxX = Math.max(maxX, no.position.x + largura)
++        maxY = Math.max(maxY, no.position.y + altura)
++      })
++
++      return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
++    },
++    // Dimensões do organograma (em px lógicos), sem disparar nenhuma
++    // captura — usado pela exportação para calcular o pixelRatio ideal e a
++    // escala/paginação antes de rasterizar. Deriva da caixa delimitadora dos
++    // nós (espaço do fluxo), não do container em tela: este último varia
++    // com o tamanho da janela do navegador, o que fazia a pré-visualização
++    // e a paginação do PDF mudarem conforme a janela estivesse maximizada
++    // ou não. Só recorre ao tamanho do container quando não há nós (ex.:
++    // organograma vazio).
+     obterDimensaoContainer() {
+       const container = this.$refs.containerRef
+-      return container ? { width: container.clientWidth, height: container.clientHeight } : null
++      if (!container) return null
++
++      const caixa = this.obterCaixaDelimitadora()
++      if (caixa) {
++        return {
++          width: caixa.width + CAPTURA_PADDING_PX * 2,
++          height: caixa.height + CAPTURA_PADDING_PX * 2,
++        }
++      }
++
++      return { width: container.clientWidth, height: container.clientHeight }
+     },
+-    // Captura exatamente o que está na tela agora (zoom/pan/nós expandidos
+-    // atuais) para servir de base à exportação em PDF/JPG. Usa html-to-image
+-    // (recomendado pelo próprio Vue Flow para exportar o gráfico) em vez de
+-    // html2canvas: este último não renderiza corretamente os <svg> das
+-    // arestas — que o Vue Flow dimensiona só via CSS, sem width/height
+-    // explícitos — nem o ícone de fonte (bi-chevron) do botão de
+-    // expandir/recolher.
++    // Captura o organograma para servir de base à exportação em PDF/JPG.
++    // Usa html-to-image (recomendado pelo próprio Vue Flow para exportar o
++    // gráfico) em vez de html2canvas: este último não renderiza
++    // corretamente os <svg> das arestas — que o Vue Flow dimensiona só via
++    // CSS, sem width/height explícitos — nem o ícone de fonte (bi-chevron)
++    // do botão de expandir/recolher.
+     async capturarComoImagem(pixelRatio = 1) {
+       const container = this.$refs.containerRef
+       if (!container) {
+@@ -282,33 +342,92 @@ export default {
+       // Evita capturar um frame no meio da animação de centralizarFlow/centralizarNo.
+       await this.$nextTick()
+ 
+-      // pixelRatio > 1 faz o html-to-image rasterizar o DOM (texto, SVGs das
+-      // arestas) diretamente em maior densidade — é isso que garante nitidez
+-      // real na exportação, e não um upscale posterior do bitmap. Quem chama
+-      // calcula o pixelRatio seguro (calculateOptimalScale, em listar.vue)
+-      // antes de invocar este método.
+-      // filter exclui os Controls (zoom in/out/fit) da imagem exportada —
+-      // eles ficam visíveis na tela, mas não fazem sentido no PDF/JPG.
+-      const canvas = await toCanvas(container, {
+-        backgroundColor: this.corFundo,
+-        pixelRatio,
+-        cacheBust: true,
+-        // Exclui da imagem exportada os Controls (zoom/fit) e as alças do
+-        // NodeResizer, que podem estar visíveis num nó selecionado.
+-        filter: (node) => {
+-          const classes = node.classList
+-          return (
+-            !classes?.contains('vue-flow__controls') &&
+-            !classes?.contains('vue-flow__resize-control')
++      // Só renderizar nós visíveis (only-render-visible-elements, ligado no
++      // template para performance na tela) filtra tanto getNodes() quanto o
++      // que de fato existe no DOM pela caixa VISÍVEL do container — que
++      // encolhe com a janela do navegador. Sem desligar isso durante a
++      // captura, nós fora da área visível em tela nem chegam a ser
++      // desenhados no DOM, ficando ausentes/cortados na imagem exportada
++      // quando a janela está pequena. Restaurado no finally abaixo.
++      const onlyRenderVisibleElementsAnterior = this.onlyRenderVisibleElements
++      this.onlyRenderVisibleElements = false
++      await this.$nextTick()
++
++      // Tamanho original (inline) do container, restaurado no finally. O
++      // container normalmente segue o layout da tela (largura: 100% da
++      // janela, altura fixa) e o wrapper interno do Vue Flow (.vue-flow)
++      // tem overflow: hidden — se o container ficar menor que o conteúdo
++      // (janela pequena), a captura recorta o organograma mesmo com os nós
++      // presentes no DOM. Redimensionar o container para caber o conteúdo
++      // inteiro antes de capturar garante o mesmo resultado independente do
++      // tamanho da janela.
++      const larguraOriginal = container.style.width
++      const alturaOriginal = container.style.height
++
++      try {
++        // Captura sempre em escala natural (zoom 1), independente do zoom
++        // atual da tela — que varia conforme o tamanho da janela do
++        // navegador (fitView reajusta o zoom para caber no container). Sem
++        // isso, o mesmo organograma gerava imagens/paginação diferentes
++        // dependendo do tamanho da janela ao exportar.
++        const caixa = this.obterCaixaDelimitadora()
++        const viewportAnterior = caixa ? this.getViewport?.() : null
++
++        const largura = caixa ? caixa.width + CAPTURA_PADDING_PX * 2 : container.clientWidth
++        const altura = caixa ? caixa.height + CAPTURA_PADDING_PX * 2 : container.clientHeight
++
++        if (caixa) {
++          container.style.width = `${largura}px`
++          container.style.height = `${altura}px`
++
++          this.setViewport(
++            { x: CAPTURA_PADDING_PX - caixa.x, y: CAPTURA_PADDING_PX - caixa.y, zoom: 1 },
++            { duration: 0 },
+           )
+-        },
+-      })
++          await this.$nextTick()
++        }
+ 
+-      return {
+-        canvas,
+-        width: container.clientWidth,
+-        height: container.clientHeight,
+-        pixelRatio,
++        // pixelRatio > 1 faz o html-to-image rasterizar o DOM (texto, SVGs das
++        // arestas) diretamente em maior densidade — é isso que garante nitidez
++        // real na exportação, e não um upscale posterior do bitmap. Quem chama
++        // calcula o pixelRatio seguro (calculateOptimalScale, em listar.vue)
++        // antes de invocar este método.
++        // filter exclui os Controls (zoom in/out/fit) da imagem exportada —
++        // eles ficam visíveis na tela, mas não fazem sentido no PDF/JPG.
++        const canvas = await toCanvas(container, {
++          backgroundColor: this.corFundo,
++          pixelRatio,
++          cacheBust: true,
++          // Força a captura a corresponder à caixa delimitadora do conteúdo
++          // (em vez do tamanho atual, em tela, do container) — garante que a
++          // imagem gerada seja sempre a mesma para o mesmo organograma,
++          // independente do tamanho da janela do navegador.
++          ...(caixa ? { width: largura, height: altura } : {}),
++          // Exclui da imagem exportada os Controls (zoom/fit) e as alças do
++          // NodeResizer, que podem estar visíveis num nó selecionado.
++          filter: (node) => {
++            const classes = node.classList
++            return (
++              !classes?.contains('vue-flow__controls') &&
++              !classes?.contains('vue-flow__resize-control')
++            )
++          },
++        })
++
++        if (viewportAnterior) {
++          this.setViewport(viewportAnterior, { duration: 0 })
++        }
++
++        return {
++          canvas,
++          width: largura,
++          height: altura,
++          pixelRatio,
++        }
++      } finally {
++        container.style.width = larguraOriginal
++        container.style.height = alturaOriginal
++        this.onlyRenderVisibleElements = onlyRenderVisibleElementsAnterior
+       }
+     },
+ 

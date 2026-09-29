@@ -1,0 +1,649 @@
+diff --git a/src/1.apresentacao/views/organograma/listar/listar.vue b/src/1.apresentacao/views/organograma/listar/listar.vue
+index fbd6e599..bddb982e 100644
+--- a/src/1.apresentacao/views/organograma/listar/listar.vue
++++ b/src/1.apresentacao/views/organograma/listar/listar.vue
+@@ -9,13 +9,45 @@
+   import alocacaoCargoServico from '@/2.servicos/alocacaocargo/alocacaoCargoServico'
+   import organogramaServico from '@/2.servicos/organograma/organogramaServico'
+   import simulacaoServico from '@/2.servicos/simulacao/simulacaoServico'
++  import projetoSimulacaoServico from '@/2.servicos/projetosimulacao/projetoSimulacaoServico'
+   import autenticarServico from '@/2.servicos/autenticacao/autenticarServico'
+   import logosRelatorioMixin from '@/1.apresentacao/helpers/identidadevisual/logosRelatorioMixin'
+   import identidadeVisualServico from '../../../../2.servicos/identidadevisual/identidadeVisualServico'
+   import Detalhes from '../detalhes/detalhes.vue'
++  import ModalExportarOrganograma, {
++    PAPEL_TAMANHOS_MM,
++    MARGEM_MM,
++    RESERVA_CABECALHO_PX,
++    RESERVA_RODAPE_PX,
++    RESERVA_LEGENDA_PX,
++    RESERVA_MARGEM_PX,
++  } from './exportar/modalExportarOrganograma.vue'
+   import { jsPDF } from 'jspdf'
+   import { formatarDataBRHoraComAs } from '@/1.apresentacao/helpers/datas/index'
+ 
++  // 1 px CSS a 96dpi convertido para milímetros físicos — mesma referência do
++  // modal de exportação, usada para converter o papel escolhido (mm) em px
++  // lógicos consumidos pelo jsPDF (unit: 'px').
++  const MM_PER_PX = 25.4 / 96
++  function mmParaPx(mm) {
++    return mm / MM_PER_PX
++  }
++
++  // Cores/labels da legenda de tipos de ação da simulação — reaproveitados de
++  // simular.html (mesmo significado: unidades/cargos mantidos, acrescidos e
++  // alterados; extintos não aparecem no organograma-grafo).
++  const LEGENDA_TIPO_ACAO = [
++    { tipo: 0, cor: '#3b82f6', rotulo: 'Atual' },
++    { tipo: 1, cor: '#22c55e', rotulo: 'Acréscimo' },
++    { tipo: 2, cor: '#eab308', rotulo: 'Alteração' },
++  ]
++
++  const SITUACAO_SIMULACAO_LABELS = {
++    0: 'Em processo',
++    1: 'Aprovada',
++    2: 'Reprovada',
++  }
++
+   export default {
+     name: 'listar-organograma',
+     mixins: [logosRelatorioMixin],
+@@ -24,6 +56,7 @@
+       Grid,
+       SelectAsyncComponent,
+       Detalhes,
++      ModalExportarOrganograma,
+     },
+     data() {
+       return {
+@@ -58,8 +91,13 @@
+         exportandoOrganograma: false,
+         modoSimulacao: false,
+         nomeSimulacao: null,
++        projetoNome: null,
++        situacaoSimulacao: null,
+         semDados: false,
+         login: '',
++        mostrarModalExportar: false,
++        dimensaoOrganogramaExportacao: { width: 0, height: 0 },
++        formatoExportarInicial: 'pdf',
+       }
+     },
+     computed: {
+@@ -71,6 +109,12 @@
+           (item) => item.unidadeFuncionalId === this.filtro.unidadeFuncionalPaiId,
+         )
+       },
++      // Reaproveitado pelo modal de exportação para reservar o mesmo espaço
++      // de legenda que a geração real do PDF usa (evita que a pré-
++      // visualização calcule uma paginação diferente da exportada).
++      mostrarLegendaExportacao() {
++        return this.modoSimulacao && this.possuiAcoesSimulacaoParaLegenda()
++      },
+     },
+     async created() {
+       this.login = autenticarServico.login()
+@@ -370,8 +414,13 @@
+           img.src = dataUrl
+         })
+       },
+-      async generateJpg() {
++      async generateJpg(parametrosPapel) {
+         try {
++          if (this.modoSimulacao && this.organogramas.length === 0) {
++            mensagem.alerta('Esta simulação não possui unidades para exportar.')
++            return
++          }
++
+           this.exportandoOrganograma = true
+ 
+           const detalhesComponent = this.$refs.detalhes
+@@ -388,9 +437,14 @@
+           // Captura o organograma já na resolução final: pixelRatio alto faz o
+           // DOM (texto, linhas) ser rasterizado nítido na origem, em vez de um
+           // bitmap pequeno esticado depois por interpolação. O JPG é um
+-          // arquivo único, então a escala fica limitada ao teto de canvas dos
+-          // navegadores (32767px).
+-          const pixelRatio = this.calculateOptimalScale(width, height, 5)
++          // arquivo único (sem paginação): a "escala" escolhida no modal de
++          // exportação apenas reduz proporcionalmente a densidade de captura
++          // (ex.: 70% gera uma imagem menos densa que 100%). A escala fica
++          // limitada ao teto de canvas dos navegadores (32767px).
++          const pixelRatioBase = this.calculateOptimalScale(width, height, 5)
++          const pixelRatio = parametrosPapel
++            ? Math.max(1, pixelRatioBase * (parametrosPapel.escala / 100))
++            : pixelRatioBase
+           const { canvas } = await detalhesComponent.capturarComoImagem(pixelRatio)
+ 
+           const jpgDataUrl = canvas.toDataURL('image/jpeg', 0.95)
+@@ -408,115 +462,114 @@
+           this.exportandoOrganograma = false
+         }
+       },
+-      async generatePdf() {
+-        try {
+-          this.exportandoOrganograma = true
+-
+-          const detalhesComponent = this.$refs.detalhes
+-          if (!detalhesComponent) {
+-            throw new Error('Componente de detalhes não encontrado')
++      // Busca/dimensiona as logos uma única vez (reaproveitadas em todas as
++      // folhas, quando a exportação for paginada por papel).
++      async prepararLogosCabecalho() {
++        const logoMaxWidth = 150
++        const logoMaxHeight = 56
++        const logos = { imap: null, pmc: null }
++
++        const logoImap = await this.buscarLogoIdentidadeUnidadeFuncional(this.filtro.unidadeFuncionalPaiId)
++        if (logoImap) {
++          const dimensaoNatural = await this.obterDimensaoImagem(logoImap)
++          logos.imap = {
++            dataUrl: logoImap,
++            formato: this.obterFormatoImagem(logoImap),
++            dimensao: this.calcularDimensaoLogo(dimensaoNatural.width, dimensaoNatural.height, logoMaxWidth, logoMaxHeight),
+           }
++        }
+ 
+-          const dimensaoContainer = detalhesComponent.obterDimensaoContainer()
+-          const { width, height } = dimensaoContainer || {}
+-          if (!width || !height || width <= 0 || height <= 0) {
+-            throw new Error(`Dimensões inválidas do organograma: ${width}x${height}`)
++        if (this.logoPmc) {
++          const dimensaoNatural = await this.obterDimensaoImagem(this.logoPmc)
++          logos.pmc = {
++            dataUrl: this.logoPmc,
++            formato: this.obterFormatoImagem(this.logoPmc),
++            dimensao: this.calcularDimensaoLogo(dimensaoNatural.width, dimensaoNatural.height, logoMaxWidth, logoMaxHeight),
+           }
++        }
+ 
+-          // Mesma ideia do JPG: captura já na resolução final (nítida), em vez
+-          // de fazer upscale do bitmap depois. Cada tile do PDF é recortado
+-          // 1:1 desse canvas, então o pixelRatio de captura é quem determina
+-          // a nitidez do documento final.
+-          const pixelRatio = this.calculateOptimalScale(width, height, 4)
+-          const { canvas } = await detalhesComponent.capturarComoImagem(pixelRatio)
++        return logos
++      },
++      // Cabeçalho institucional — mesmo texto para organograma vigente e
++      // para simulação (a identificação do cenário simulado é feita pela
++      // legenda de ações, não pelo título do cabeçalho).
++      desenharCabecalhoPdf(pdf, pageWidth, margin, logos) {
++        if (logos.imap) {
++          const { dataUrl, formato, dimensao } = logos.imap
++          const logoY = margin + 10 + (56 - dimensao.height) / 2
++          pdf.addImage(dataUrl, formato, margin, logoY, dimensao.width, dimensao.height)
++        }
+ 
+-          // Configurações do cabeçalho e rodapé
+-          const headerHeight = 100
+-          const footerHeight = 40
+-          const margin = 20
+-
+-          const orientation = width > height ? 'landscape' : 'portrait'
+-          const pdf = new jsPDF({
+-            orientation,
+-            unit: 'px',
+-            format: [width, height + headerHeight + footerHeight + margin * 3],
+-          })
+-
+-          const pageWidth = pdf.internal.pageSize.getWidth()
+-
+-          // Logo da Unidade Funcional selecionada (esquerda, IMAP) e logo
+-          // Principal/Prefeitura (direita, via logosRelatorioMixin — mesma usada
+-          // nos demais relatórios). A logo da Unidade é específica do órgão
+-          // pesquisado; quando não houver cadastro, o cabeçalho fica sem ela.
+-          const logoMaxWidth = 150
+-          const logoMaxHeight = 56
+-
+-          const logoImap = await this.buscarLogoIdentidadeUnidadeFuncional(this.filtro.unidadeFuncionalPaiId)
+-          if (logoImap) {
+-            const dimensaoNatural = await this.obterDimensaoImagem(logoImap)
+-            const dimensao = this.calcularDimensaoLogo(dimensaoNatural.width, dimensaoNatural.height, logoMaxWidth, logoMaxHeight)
+-            const logoY = margin + 10 + (logoMaxHeight - dimensao.height) / 2
+-            pdf.addImage(logoImap, this.obterFormatoImagem(logoImap), margin, logoY, dimensao.width, dimensao.height)
+-          }
++        if (logos.pmc) {
++          const { dataUrl, formato, dimensao } = logos.pmc
++          const logoY = margin + 5 + (56 - dimensao.height) / 2
++          pdf.addImage(dataUrl, formato, pageWidth - margin - dimensao.width, logoY, dimensao.width, dimensao.height)
++        }
+ 
+-          if (this.logoPmc) {
+-            const dimensaoNatural = await this.obterDimensaoImagem(this.logoPmc)
+-            const dimensao = this.calcularDimensaoLogo(dimensaoNatural.width, dimensaoNatural.height, logoMaxWidth, logoMaxHeight)
+-            const logoY = margin + 5 + (logoMaxHeight - dimensao.height) / 2
+-            pdf.addImage(this.logoPmc, this.obterFormatoImagem(this.logoPmc), pageWidth - margin - dimensao.width, logoY, dimensao.width, dimensao.height)
+-          }
++        const centerX = pageWidth / 2
++        pdf.setFontSize(14)
++        pdf.setTextColor(0, 0, 0)
++        pdf.setFont('helvetica', 'bold')
++        pdf.text('Prefeitura Municipal de Curitiba', centerX, margin + 28, { align: 'center' })
++
++        pdf.setFontSize(11)
++        pdf.setFont('helvetica', 'normal')
++        pdf.setTextColor(95, 107, 118)
++        pdf.text('SEAC - Sistema de Estruturas Administrativas de Curitiba', centerX, margin + 45, { align: 'center' })
++
++        pdf.setFontSize(12)
++        pdf.setTextColor(0, 0, 0)
++        pdf.setFont('helvetica', 'bold')
++        pdf.text('Organograma', centerX, margin + 62, { align: 'center' })
++
++        pdf.setDrawColor(207, 214, 222)
++        pdf.setLineWidth(1)
++        pdf.line(margin, margin + 75, pageWidth - margin, margin + 75)
++      },
++      hexParaRgb(hex) {
++        const valor = parseInt(hex.replace('#', ''), 16)
++        return [(valor >> 16) & 255, (valor >> 8) & 255, valor & 255]
++      },
++      // Legenda dos tipos de ação do cenário simulado (RN.4.5.7): só aparece
++      // quando o organograma exportado possui unidades/cargos acrescidos ou
++      // alterados. Extinções não chegam ao organograma-grafo (são removidas
++      // da árvore), por isso não entram nesta legenda.
++      renderizarLegendaPdf(pdf, margin, y) {
++        let x = margin
++        pdf.setFontSize(9)
++        LEGENDA_TIPO_ACAO.filter((item) => this.organogramas.some((no) => no.tipoAcaoSimulacao === item.tipo)).forEach((item) => {
++          const [r, g, b] = this.hexParaRgb(item.cor)
++          pdf.setFillColor(r, g, b)
++          pdf.rect(x, y - 7, 8, 8, 'F')
++          pdf.setTextColor(60, 60, 60)
++          pdf.setFont('helvetica', 'normal')
++          pdf.text(item.rotulo, x + 12, y)
++          x += 12 + pdf.getTextWidth(item.rotulo) + 18
++        })
++      },
++      possuiAcoesSimulacaoParaLegenda() {
++        return this.organogramas.some((item) => item.tipoAcaoSimulacao === 1 || item.tipoAcaoSimulacao === 2)
++      },
++      // Rodapé - Informações de geração (posição fixa no final da folha).
++      renderizarRodapePdf(pdf, pageWidth, pageHeight, margin) {
++        const footerY = pageHeight - 15
+ 
+-          // Texto central do cabeçalho
+-          const centerX = pageWidth / 2
+-          pdf.setFontSize(14)
+-          pdf.setTextColor(0, 0, 0)
+-          pdf.setFont('helvetica', 'bold')
+-          pdf.text('Prefeitura Municipal de Curitiba', centerX, margin + 28, { align: 'center' })
++        pdf.setDrawColor(207, 214, 222)
++        pdf.setLineWidth(1)
++        pdf.line(margin, footerY - 25, pageWidth - margin, footerY - 25)
+ 
+-          pdf.setFontSize(11)
+-          pdf.setFont('helvetica', 'normal')
+-          pdf.setTextColor(95, 107, 118)
+-          pdf.text('SEAC - Sistema de Estruturas Administrativas de Curitiba', centerX, margin + 45, { align: 'center' })
++        pdf.setFontSize(9)
++        pdf.setTextColor(100, 100, 100)
+ 
+-          pdf.setFontSize(12)
+-          pdf.setTextColor(0, 0, 0)
++        if (this.modoSimulacao) {
+           pdf.setFont('helvetica', 'bold')
+-          pdf.text('Organograma', centerX, margin + 62, { align: 'center' })
+-
+-          pdf.setDrawColor(207, 214, 222)
+-          pdf.setLineWidth(1)
+-          pdf.line(margin, margin + 75, pageWidth - margin, margin + 75)
+-
+-          // Adiciona o organograma em blocos (tiles) abaixo do cabeçalho, recortados
+-          // 1:1 do canvas já capturado em alta resolução (sem reamostragem) — mantém
+-          // o texto nítido mesmo em organogramas extensos, sem esbarrar no limite de
+-          // canvas do navegador. PNG (sem perdas) evita a blocagem que o JPEG causa
+-          // em bordas de texto/linhas retas. x/y/w/h saem em pixels do canvas
+-          // capturado; dividir por pixelRatio converte de volta para os px lógicos
+-          // usados pelo PDF.
+-          await this.renderizarTiles(canvas, canvas.width, canvas.height, 1, 4000, (tile, x, y, w, h) => {
+-            const tileDataUrl = tile.toDataURL('image/png')
+-            pdf.addImage(
+-              tileDataUrl,
+-              'PNG',
+-              x / pixelRatio,
+-              headerHeight + margin + y / pixelRatio,
+-              w / pixelRatio,
+-              h / pixelRatio
+-            )
+-          })
+-
+-          // Rodapé - Informações de geração (posição fixa no final)
+-          const pageHeight = pdf.internal.pageSize.getHeight()
+-          const footerY = pageHeight - 15
+-
+-          pdf.setDrawColor(207, 214, 222)
+-          pdf.setLineWidth(1)
+-          pdf.line(margin, footerY - 25, pageWidth - margin, footerY - 25)
+-
+-          pdf.setFontSize(9)
+-          pdf.setTextColor(100, 100, 100)
++          pdf.text('Simulação', margin, footerY - 10)
+ 
++          pdf.setFont('helvetica', 'normal')
++          const projetoTexto = this.projetoNome ? ` · Projeto: ${this.projetoNome}` : ''
++          const situacaoTexto = this.situacaoSimulacao ? ` · Situação: ${this.situacaoSimulacao}` : ''
++          pdf.text(`${this.nomeSimulacao || '-'}${projetoTexto}${situacaoTexto}`, margin, footerY)
++        } else {
+           const atoOficialValido = this.metadado.atoOficialResponsavelVigente && this.metadado.atoOficialResponsavelVigente.trim() !== ''
+           const ultimoAtoValido = this.metadado.ultimoAtoOficialDeAlteracao && this.metadado.ultimoAtoOficialDeAlteracao.trim() !== ''
+           if (atoOficialValido && ultimoAtoValido) {
+@@ -532,52 +585,218 @@
+             pdf.setFont('helvetica', 'normal')
+             pdf.text(this.metadado.atoOficialResponsavelVigente, margin, footerY)
+           }
++        }
+ 
+-          const loginUsuario = this.login || 'Sistema'
+-          pdf.setFont('helvetica', 'normal')
+-          const geradoPorText = 'Gerado por: '
+-          const geradoPorWidth = pdf.getTextWidth(geradoPorText)
++        const loginUsuario = this.login || 'Sistema'
++        pdf.setFont('helvetica', 'normal')
++        const geradoPorText = 'Gerado por: '
++        const geradoPorWidth = pdf.getTextWidth(geradoPorText)
+ 
+-          pdf.setFont('helvetica', 'bold')
+-          const loginUsuarioWidth = pdf.getTextWidth(loginUsuario)
++        pdf.setFont('helvetica', 'bold')
++        const loginUsuarioWidth = pdf.getTextWidth(loginUsuario)
+ 
+-          const geradoPorTotalWidth = geradoPorWidth + loginUsuarioWidth
+-          const geradoPorX = (pageWidth - geradoPorTotalWidth) / 2
++        const geradoPorTotalWidth = geradoPorWidth + loginUsuarioWidth
++        const geradoPorX = (pageWidth - geradoPorTotalWidth) / 2
+ 
+-          pdf.setFont('helvetica', 'normal')
+-          pdf.text(geradoPorText, geradoPorX, footerY)
++        pdf.setFont('helvetica', 'normal')
++        pdf.text(geradoPorText, geradoPorX, footerY)
+ 
+-          pdf.setFont('helvetica', 'bold')
+-          pdf.text(loginUsuario, geradoPorX + geradoPorWidth, footerY)
+-
+-          const agora = new Date()
+-          const dataFormatada = agora.toLocaleDateString('pt-BR', {
+-            day: '2-digit',
+-            month: '2-digit',
+-            year: 'numeric',
+-          })
+-          const horaFormatada = agora.toLocaleTimeString('pt-BR', {
+-            hour: '2-digit',
+-            minute: '2-digit',
+-            second: '2-digit',
+-          })
+-          const dataHoraAtual = `${dataFormatada} às ${horaFormatada}`
++        pdf.setFont('helvetica', 'bold')
++        pdf.text(loginUsuario, geradoPorX + geradoPorWidth, footerY)
+ 
+-          pdf.setFont('helvetica', 'normal')
+-          const dataHoraLabel = 'Data/Hora: '
+-          const dataHoraLabelWidth = pdf.getTextWidth(dataHoraLabel)
++        const agora = new Date()
++        const dataFormatada = agora.toLocaleDateString('pt-BR', {
++          day: '2-digit',
++          month: '2-digit',
++          year: 'numeric',
++        })
++        const horaFormatada = agora.toLocaleTimeString('pt-BR', {
++          hour: '2-digit',
++          minute: '2-digit',
++          second: '2-digit',
++        })
++        const dataHoraAtual = `${dataFormatada} às ${horaFormatada}`
+ 
+-          pdf.setFont('helvetica', 'bold')
+-          const dataHoraWidth = pdf.getTextWidth(dataHoraAtual)
+-          const totalWidth = dataHoraLabelWidth + dataHoraWidth
++        pdf.setFont('helvetica', 'normal')
++        const dataHoraLabel = 'Data/Hora: '
++        const dataHoraLabelWidth = pdf.getTextWidth(dataHoraLabel)
+ 
+-          pdf.setFont('helvetica', 'normal')
+-          pdf.text(dataHoraLabel, pageWidth - margin - totalWidth, footerY)
++        pdf.setFont('helvetica', 'bold')
++        const dataHoraWidth = pdf.getTextWidth(dataHoraAtual)
++        const totalWidth = dataHoraLabelWidth + dataHoraWidth
+ 
+-          pdf.setFont('helvetica', 'bold')
+-          pdf.text(dataHoraAtual, pageWidth - margin - dataHoraWidth, footerY)
++        pdf.setFont('helvetica', 'normal')
++        pdf.text(dataHoraLabel, pageWidth - margin - totalWidth, footerY)
++
++        pdf.setFont('helvetica', 'bold')
++        pdf.text(dataHoraAtual, pageWidth - margin - dataHoraWidth, footerY)
++      },
++      // Fluxo legado: uma única página dimensionada ao conteúdo (comportamento
++      // preservado 1:1 quando generatePdf é chamado sem parâmetros de papel).
++      async gerarPdfConteudoAjustado(width, height, detalhesComponent) {
++        // Mesma ideia do JPG: captura já na resolução final (nítida), em vez
++        // de fazer upscale do bitmap depois. Cada tile do PDF é recortado
++        // 1:1 desse canvas, então o pixelRatio de captura é quem determina
++        // a nitidez do documento final.
++        const pixelRatio = this.calculateOptimalScale(width, height, 4)
++        const { canvas } = await detalhesComponent.capturarComoImagem(pixelRatio)
++
++        const headerHeight = 100
++        const footerHeight = 40
++        const margin = 20
++        const mostrarLegenda = this.modoSimulacao && this.possuiAcoesSimulacaoParaLegenda()
++        const legendaHeight = mostrarLegenda ? 24 : 0
++
++        const orientation = width > height ? 'landscape' : 'portrait'
++        const pdf = new jsPDF({
++          orientation,
++          unit: 'px',
++          format: [width, height + headerHeight + legendaHeight + footerHeight + margin * 3],
++        })
++
++        const pageWidth = pdf.internal.pageSize.getWidth()
++        const logos = await this.prepararLogosCabecalho()
++        this.desenharCabecalhoPdf(pdf, pageWidth, margin, logos)
++        if (mostrarLegenda) {
++          this.renderizarLegendaPdf(pdf, margin, margin + 75 + 16)
++        }
++
++        // Adiciona o organograma em blocos (tiles) abaixo do cabeçalho, recortados
++        // 1:1 do canvas já capturado em alta resolução (sem reamostragem) — mantém
++        // o texto nítido mesmo em organogramas extensos, sem esbarrar no limite de
++        // canvas do navegador. PNG (sem perdas) evita a blocagem que o JPEG causa
++        // em bordas de texto/linhas retas. x/y/w/h saem em pixels do canvas
++        // capturado; dividir por pixelRatio converte de volta para os px lógicos
++        // usados pelo PDF.
++        await this.renderizarTiles(canvas, canvas.width, canvas.height, 1, 4000, (tile, x, y, w, h) => {
++          const tileDataUrl = tile.toDataURL('image/png')
++          pdf.addImage(
++            tileDataUrl,
++            'PNG',
++            x / pixelRatio,
++            headerHeight + legendaHeight + margin + y / pixelRatio,
++            w / pixelRatio,
++            h / pixelRatio
++          )
++        })
+ 
+-          pdf.save('organograma.pdf')
++        const pageHeight = pdf.internal.pageSize.getHeight()
++        this.renderizarRodapePdf(pdf, pageWidth, pageHeight, margin)
++
++        pdf.save('organograma.pdf')
++      },
++      // Fluxo novo: pagina o organograma em folhas físicas (A4/A3/A2, retrato
++      // ou paisagem), respeitando a escala e a grade (cols x rows) calculadas
++      // pelo modal de exportação a partir do modo de ajuste escolhido.
++      async gerarPdfPaginadoPorPapel(parametrosPapel, width, height, detalhesComponent) {
++        const { papel, orientacao, escala, folhas } = parametrosPapel
++        const papelBase = PAPEL_TAMANHOS_MM[papel] || PAPEL_TAMANHOS_MM.A4
++        const papelMm =
++          orientacao === 'paisagem'
++            ? { width: papelBase.height, height: papelBase.width }
++            : { width: papelBase.width, height: papelBase.height }
++
++        // Reserva idêntica à usada pelo modal para calcular folhas/escala —
++        // veja modalExportarOrganograma.vue (áreaConteudoMm).
++        const headerHeight = RESERVA_CABECALHO_PX
++        const footerHeight = RESERVA_RODAPE_PX
++        const margin = RESERVA_MARGEM_PX
++        const mostrarLegenda = this.modoSimulacao && this.possuiAcoesSimulacaoParaLegenda()
++        const legendaHeight = mostrarLegenda ? RESERVA_LEGENDA_PX : 0
++
++        const pageWidthPx = mmParaPx(papelMm.width)
++        const pageHeightPx = mmParaPx(papelMm.height)
++        const areaConteudoLarguraPx = pageWidthPx - mmParaPx(MARGEM_MM) * 2
++        const areaConteudoAlturaPx = pageHeightPx - headerHeight - legendaHeight - footerHeight - margin * 2
++        const orientationJsPdf = orientacao === 'paisagem' ? 'landscape' : 'portrait'
++
++        const pdf = new jsPDF({ orientation: orientationJsPdf, unit: 'px', format: [pageWidthPx, pageHeightPx] })
++
++        // Escala física escolhida no modal: cada px lógico do organograma
++        // ocupa (escala/100) do seu tamanho natural na folha impressa.
++        const fatorEscala = Math.max(escala, 1) / 100
++        const { cols, rows } = folhas
++
++        // Captura o organograma inteiro uma única vez, na resolução final:
++        // cada folha recorta 1:1 a sua fatia deste canvas (sem reamostragem).
++        const pixelRatio = this.calculateOptimalScale(width, height, 4)
++        const { canvas } = await detalhesComponent.capturarComoImagem(pixelRatio)
++        const logos = await this.prepararLogosCabecalho()
++
++        const larguraFatiaOrigemPx = (areaConteudoLarguraPx / fatorEscala) * pixelRatio
++        const alturaFatiaOrigemPx = (areaConteudoAlturaPx / fatorEscala) * pixelRatio
++
++        for (let linha = 0; linha < rows; linha += 1) {
++          for (let coluna = 0; coluna < cols; coluna += 1) {
++            if (linha > 0 || coluna > 0) {
++              pdf.addPage([pageWidthPx, pageHeightPx], orientationJsPdf)
++            }
++
++            const pageWidth = pdf.internal.pageSize.getWidth()
++            this.desenharCabecalhoPdf(pdf, pageWidth, margin, logos)
++            if (mostrarLegenda) {
++              this.renderizarLegendaPdf(pdf, margin, margin + 75 + 16)
++            }
++
++            const sx = coluna * larguraFatiaOrigemPx
++            const sy = linha * alturaFatiaOrigemPx
++            const sw = Math.min(larguraFatiaOrigemPx, canvas.width - sx)
++            const sh = Math.min(alturaFatiaOrigemPx, canvas.height - sy)
++
++            if (sw > 0 && sh > 0) {
++              const destWidthPx = (sw / pixelRatio) * fatorEscala
++              const destHeightPx = (sh / pixelRatio) * fatorEscala
++
++              const tileCanvas = document.createElement('canvas')
++              tileCanvas.width = Math.max(1, Math.round(sw))
++              tileCanvas.height = Math.max(1, Math.round(sh))
++              const ctx = tileCanvas.getContext('2d')
++              ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, tileCanvas.width, tileCanvas.height)
++
++              // Centraliza horizontalmente o conteúdo dentro da área útil da
++              // folha — só faz diferença na última coluna, cuja fatia sobra
++              // menor que as demais (as folhas cheias já preenchem toda a
++              // largura). Verticalmente o conteúdo fica ancorado no topo
++              // (logo abaixo do cabeçalho/legenda), sem centralizar — a
++              // imagem deve começar sempre no topo da folha, não flutuar.
++              const offsetX = margin + Math.max(0, (areaConteudoLarguraPx - destWidthPx) / 2)
++              const offsetY = headerHeight + legendaHeight + margin
++
++              pdf.addImage(tileCanvas.toDataURL('image/png'), 'PNG', offsetX, offsetY, destWidthPx, destHeightPx)
++            }
++
++            const pageHeight = pdf.internal.pageSize.getHeight()
++            this.renderizarRodapePdf(pdf, pageWidth, pageHeight, margin)
++          }
++        }
++
++        pdf.save('organograma.pdf')
++      },
++      async generatePdf(parametrosPapel) {
++        try {
++          if (this.modoSimulacao && this.organogramas.length === 0) {
++            mensagem.alerta('Esta simulação não possui unidades para exportar.')
++            return
++          }
++
++          this.exportandoOrganograma = true
++
++          const detalhesComponent = this.$refs.detalhes
++          if (!detalhesComponent) {
++            throw new Error('Componente de detalhes não encontrado')
++          }
++
++          const dimensaoContainer = detalhesComponent.obterDimensaoContainer()
++          const { width, height } = dimensaoContainer || {}
++          if (!width || !height || width <= 0 || height <= 0) {
++            throw new Error(`Dimensões inválidas do organograma: ${width}x${height}`)
++          }
++
++          if (parametrosPapel) {
++            await this.gerarPdfPaginadoPorPapel(parametrosPapel, width, height, detalhesComponent)
++          } else {
++            await this.gerarPdfConteudoAjustado(width, height, detalhesComponent)
++          }
+ 
+           mensagem.sucesso('PDF exportado com sucesso.')
+         } catch (error) {
+@@ -654,6 +873,8 @@
+ 
+           if (respostaSimulacao.sucesso) {
+             this.nomeSimulacao = respostaSimulacao.dados.nome
++            this.situacaoSimulacao = SITUACAO_SIMULACAO_LABELS[respostaSimulacao.dados.status] ?? null
++            await this.carregarNomeProjetoSimulacao(respostaSimulacao.dados.projetoSimulacaoChave)
+           }
+ 
+           if (respostaOrg.sucesso && respostaOrg.dados?.length > 0) {
+@@ -668,6 +889,53 @@
+           this.carregando = false
+         }
+       },
++      // Nome do projeto de simulação, usado no cabeçalho/rodapé do PDF exportado
++      // no lugar da legislação de estrutura (RN.4.5.7). Falha na busca não
++      // impede a exportação: o cabeçalho simplesmente omite o projeto.
++      async carregarNomeProjetoSimulacao(projetoSimulacaoChave) {
++        if (!projetoSimulacaoChave) return
++        try {
++          const respostaProjeto = await projetoSimulacaoServico.pesquisarPorChave(projetoSimulacaoChave)
++          if (respostaProjeto.sucesso) {
++            this.projetoNome = respostaProjeto.dados.nome
++          }
++        } catch {
++          this.projetoNome = null
++        }
++      },
++      // Abre o modal de parâmetros de exportação (papel/orientação/modo de
++      // ajuste). Bloqueia a exportação sem gerar arquivo quando o cenário
++      // simulado não possui unidades (Cenário 3 da atividade).
++      abrirModalExportar(formato = 'pdf') {
++        if (this.modoSimulacao && this.organogramas.length === 0) {
++          mensagem.alerta('Esta simulação não possui unidades para exportar.')
++          return
++        }
++
++        const detalhesComponent = this.$refs.detalhes
++        this.dimensaoOrganogramaExportacao = detalhesComponent?.obterDimensaoContainer() || { width: 0, height: 0 }
++        this.formatoExportarInicial = formato
++        this.mostrarModalExportar = true
++      },
++      fecharModalExportar() {
++        this.mostrarModalExportar = false
++      },
++      // Repassado ao modal como `capturarPreview`: delega a captura ao mesmo
++      // método usado pela geração real (Detalhes.capturarComoImagem), para que
++      // a pré-visualização reflita fielmente o que será exportado.
++      capturarPreviewExportacao(pixelRatio) {
++        const detalhesComponent = this.$refs.detalhes
++        if (!detalhesComponent) return Promise.resolve(null)
++        return detalhesComponent.capturarComoImagem(pixelRatio)
++      },
++      async confirmarExportacao(parametrosPapel) {
++        this.mostrarModalExportar = false
++        if (parametrosPapel.formato === 'jpg') {
++          await this.generateJpg(parametrosPapel)
++        } else {
++          await this.generatePdf(parametrosPapel)
++        }
++      },
+ 
+       async buscarUnidadeFuncionalPai({ search, page, pageSize, ids }) {
+         try {

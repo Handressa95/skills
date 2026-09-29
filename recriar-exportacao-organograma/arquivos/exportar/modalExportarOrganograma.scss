@@ -1,0 +1,70 @@
+.exportar-organograma-folha {
+  position: relative;
+  width: 100%;
+  max-height: 420px;
+  margin: 0 auto;
+  background: #fff;
+  border: 1px solid #dfe8f3;
+  box-shadow: 0 0px 6px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+
+  &__status {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #64748b;
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 1rem;
+  }
+
+  &__grade {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  &__celula {
+    position: absolute;
+    box-sizing: border-box;
+    border: 1px dashed rgba(100, 116, 139, 0.35);
+
+    &--atual {
+      border: 2px dashed #f97316;
+    }
+  }
+}
+
+.exportar-organograma-legenda {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  font-size: 0.78rem;
+  color: #64748b;
+
+  &__continuacao {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  &__faixa {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    background: #f97316;
+    flex-shrink: 0;
+  }
+}

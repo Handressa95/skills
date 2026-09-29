@@ -1,0 +1,43 @@
+diff --git a/src/1.apresentacao/views/organograma/listar/listar.html b/src/1.apresentacao/views/organograma/listar/listar.html
+index 37189051..474cfd77 100644
+--- a/src/1.apresentacao/views/organograma/listar/listar.html
++++ b/src/1.apresentacao/views/organograma/listar/listar.html
+@@ -143,7 +143,6 @@
+ 				</button>
+ 				<div v-else></div>
+ 
+-				<!-- Exportação temporariamente oculta: ainda não suportada pelo organograma em VueFlow -->
+ 				<div class="d-flex gap-2">
+ 					<div class="btn-group">
+ 						<button type="button"
+@@ -158,12 +157,12 @@
+ 						</button>
+ 						<ul class="dropdown-menu dropdown-menu-end">
+ 							<li>
+-								<a class="dropdown-item" role="button" @click="generatePdf()">
++								<a class="dropdown-item" role="button" @click="abrirModalExportar('pdf')">
+ 									<i class="bi bi-filetype-pdf text-danger me-2"></i>PDF
+ 								</a>
+ 							</li>
+ 							<li>
+-								<a class="dropdown-item" role="button" @click="generateJpg()">
++								<a class="dropdown-item" role="button" @click="abrirModalExportar('jpg')">
+ 									<i class="bi bi-filetype-jpg text-danger me-2"></i>JPG
+ 								</a>
+ 							</li>
+@@ -173,6 +172,15 @@
+ 			</div>
+ 		</div>
+ 	</div>
++
++	<ModalExportarOrganograma :visivel="mostrarModalExportar"
++														:dimensao-organograma="dimensaoOrganogramaExportacao"
++														:modo-simulacao="modoSimulacao"
++														:mostrar-legenda="mostrarLegendaExportacao"
++														:formato-inicial="formatoExportarInicial"
++														:capturar-preview="capturarPreviewExportacao"
++														@close="fecharModalExportar"
++														@confirmar="confirmarExportacao"></ModalExportarOrganograma>
+ </section>
+ 
+ <!-- Modal Histórico de estados -->

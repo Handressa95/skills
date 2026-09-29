@@ -1,0 +1,167 @@
+diff --git a/src/1.apresentacao/views/organograma/detalhes/detalhes.test.js b/src/1.apresentacao/views/organograma/detalhes/detalhes.test.js
+index f4b0c2a5..3c6a736b 100644
+--- a/src/1.apresentacao/views/organograma/detalhes/detalhes.test.js
++++ b/src/1.apresentacao/views/organograma/detalhes/detalhes.test.js
+@@ -20,9 +20,11 @@ vi.mock('@vue-flow/core', async (importOriginal) => {
+       setCenter: vi.fn(),
+       findNode: vi.fn(),
+       getNodes: [],
++      nodes: [],
+       applyNodeChanges: vi.fn((changes) => changes),
+       getViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
+       setViewport: vi.fn(),
++      onlyRenderVisibleElements: true,
+     })),
+   }
+ })
+@@ -679,6 +681,63 @@ describe('detalhes-organograma', () => {
+       })
+       expect(resultado.pixelRatio).toBe(3.5)
+     })
++
++    it('deve capturar em zoom 1 usando a caixa delimitadora dos nos (independente do tamanho em tela do container), quando houver nos', async () => {
++      const setViewportMock = vi.fn()
++      const getViewportMock = vi.fn(() => ({ x: 5, y: 5, zoom: 0.6 }))
++      useVueFlow.mockReturnValueOnce({
++        updateNodeInternals: vi.fn(),
++        fitView: vi.fn(),
++        setCenter: vi.fn(),
++        findNode: vi.fn(),
++        getNodes: [
++          { id: '1', position: { x: 0, y: 0 }, dimensions: { width: 180, height: 90 } },
++          { id: '2', position: { x: 300, y: 200 }, dimensions: { width: 180, height: 90 } },
++        ],
++        nodes: [
++          { id: '1', position: { x: 0, y: 0 }, dimensions: { width: 180, height: 90 } },
++          { id: '2', position: { x: 300, y: 200 }, dimensions: { width: 180, height: 90 } },
++        ],
++        applyNodeChanges: vi.fn(),
++        getViewport: getViewportMock,
++        setViewport: setViewportMock,
++        onlyRenderVisibleElements: true,
++      })
++      wrapper = await createWrapper()
++      await flushPromises()
++
++      const fakeCanvas = {}
++      toCanvas.mockResolvedValue(fakeCanvas)
++      const container = wrapper.vm.$refs.containerRef
++
++      const resultado = await wrapper.vm.capturarComoImagem(2)
++
++      // Ajusta a viewport para zoom 1, posicionando a caixa delimitadora
++      // (que começa em x=0,y=0) a partir do padding de captura.
++      expect(setViewportMock).toHaveBeenNthCalledWith(1, { x: 40, y: 40, zoom: 1 }, { duration: 0 })
++      expect(toCanvas).toHaveBeenCalledWith(
++        container,
++        expect.objectContaining({ width: 480 + 80, height: 290 + 80, pixelRatio: 2 }),
++      )
++      // Restaura a viewport original apos a captura.
++      expect(setViewportMock).toHaveBeenNthCalledWith(2, { x: 5, y: 5, zoom: 0.6 }, { duration: 0 })
++      expect(resultado).toEqual({ canvas: fakeCanvas, width: 560, height: 370, pixelRatio: 2 })
++    })
++
++    it('nao deve alterar a viewport quando nao houver nos (fallback para o tamanho do container)', async () => {
++      wrapper = await createWrapper()
++      await flushPromises()
++
++      const fakeCanvas = {}
++      toCanvas.mockResolvedValue(fakeCanvas)
++      const container = wrapper.vm.$refs.containerRef
++
++      await wrapper.vm.capturarComoImagem()
++
++      const opcoes = toCanvas.mock.calls[0][1]
++      expect(opcoes.width).toBeUndefined()
++      expect(opcoes.height).toBeUndefined()
++    })
+   })
+ 
+   describe('corFundo (seletor de cor de fundo)', () => {
+@@ -961,6 +1020,86 @@ describe('detalhes-organograma', () => {
+ 
+       expect(resultado).toBeNull()
+     })
++
++    it('deve calcular as dimensoes a partir da caixa delimitadora dos nos (posicao/tamanho), nao do tamanho em tela do container', async () => {
++      useVueFlow.mockReturnValueOnce({
++        updateNodeInternals: vi.fn(),
++        fitView: vi.fn(),
++        setCenter: vi.fn(),
++        findNode: vi.fn(),
++        getNodes: [
++          { id: '1', position: { x: 0, y: 0 }, dimensions: { width: 180, height: 90 } },
++          { id: '2', position: { x: 300, y: 200 }, dimensions: { width: 180, height: 90 } },
++        ],
++        nodes: [
++          { id: '1', position: { x: 0, y: 0 }, dimensions: { width: 180, height: 90 } },
++          { id: '2', position: { x: 300, y: 200 }, dimensions: { width: 180, height: 90 } },
++        ],
++        applyNodeChanges: vi.fn(),
++        getViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
++        setViewport: vi.fn(),
++        onlyRenderVisibleElements: true,
++      })
++      wrapper = await createWrapper()
++      await flushPromises()
++
++      const resultado = wrapper.vm.obterDimensaoContainer()
++
++      // largura/altura = extensao real dos nos (300+180=480, 200+90=290) + 2x padding (40).
++      expect(resultado).toEqual({ width: 480 + 80, height: 290 + 80 })
++    })
++  })
++
++  describe('obterCaixaDelimitadora', () => {
++    it('deve retornar null quando nao houver nos', () => {
++      wrapper = createWrapper()
++
++      expect(wrapper.vm.obterCaixaDelimitadora()).toBeNull()
++    })
++
++    it('deve calcular a caixa delimitadora considerando posicao e dimensoes de todos os nos', async () => {
++      useVueFlow.mockReturnValueOnce({
++        updateNodeInternals: vi.fn(),
++        fitView: vi.fn(),
++        setCenter: vi.fn(),
++        findNode: vi.fn(),
++        getNodes: [
++          { id: '1', position: { x: 10, y: 20 }, dimensions: { width: 180, height: 90 } },
++          { id: '2', position: { x: -50, y: 100 }, dimensions: { width: 180, height: 90 } },
++        ],
++        nodes: [
++          { id: '1', position: { x: 10, y: 20 }, dimensions: { width: 180, height: 90 } },
++          { id: '2', position: { x: -50, y: 100 }, dimensions: { width: 180, height: 90 } },
++        ],
++        applyNodeChanges: vi.fn(),
++        getViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
++        setViewport: vi.fn(),
++        onlyRenderVisibleElements: true,
++      })
++      wrapper = await createWrapper()
++      await flushPromises()
++
++      expect(wrapper.vm.obterCaixaDelimitadora()).toEqual({ x: -50, y: 20, width: 240, height: 170 })
++    })
++
++    it('deve usar as dimensoes padrao (NODE_WIDTH/NODE_HEIGHT) quando o no ainda nao possuir dimensions medidas', async () => {
++      useVueFlow.mockReturnValueOnce({
++        updateNodeInternals: vi.fn(),
++        fitView: vi.fn(),
++        setCenter: vi.fn(),
++        findNode: vi.fn(),
++        getNodes: [{ id: '1', position: { x: 0, y: 0 } }],
++        nodes: [{ id: '1', position: { x: 0, y: 0 } }],
++        applyNodeChanges: vi.fn(),
++        getViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
++        setViewport: vi.fn(),
++        onlyRenderVisibleElements: true,
++      })
++      wrapper = await createWrapper()
++      await flushPromises()
++
++      expect(wrapper.vm.obterCaixaDelimitadora()).toEqual({ x: 0, y: 0, width: 200, height: 90 })
++    })
+   })
+ 
+   describe('watch nodes', () => {
